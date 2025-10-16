@@ -1,0 +1,25 @@
+[build-system]
+requires = ["setuptools>=69", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "mony"
+version = "0.1.0"
+description = "CLI for generating UI concept images via OpenRouter"
+readme = "README.md"
+authors = [{ name = "Mony Maintainers" }]
+license = "MIT"
+requires-python = ">=3.10"
+dependencies = [
+    "requests",
+]
+
+[project.urls]
+Homepage = "https://example.com/mony"
+
+[project.scripts]
+mony = "mony.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["mony"]
