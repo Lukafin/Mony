@@ -42,25 +42,32 @@ Run in dry-run mode to inspect the assembled prompts without making API calls:
 python -m mony "Meditation mobile onboarding flow" modern funky --dry-run
 ```
 
-Customize options such as model, image size, prompt suffix, and output directory:
+Customize options such as model, aspect ratio/size, prompt suffix, and output directory:
 
 ```bash
 python -m mony "AI writing assistant workspace" modern \
-  --model openrouter/flux-schnell \
-  --size 768x1024 \
+  --model google/gemini-2.5-flash-image-preview \
+  --size 9:16 \
   --prompt-suffix "Render as a Figma mockup"
 ```
 
-Provide reference imagery from a local file or URL. The CLI inlines local files
-as base64 and passes all references to the OpenRouter `image[]` parameter:
+`--size` accepts `WIDTHxHEIGHT` or `W:H` (e.g., `768x1344` or `9:16`). When supported by the model, this maps to `image_config.aspect_ratio`.
+
+Provide reference imagery from a local file or URL. Local files are base64-inlined and
+sent as data URLs within the chat message; URLs are passed directly. Repeat `--reference`
+to include multiple images:
 
 ```bash
 python -m mony "Smart home control hub" modern \
-  --reference ./moodboard.png \
+  --model google/gemini-2.5-flash-image-preview \
+  --size 9:16 \
+  --reference ./referenceImages/promo.png \
   --reference https://example.com/layout-inspiration.png
 ```
 
 Generated images are saved under the `outputs/` directory with timestamps.
+
+Note: Use an image-capable chat model (output modality includes "image"). See the OpenRouter docs: https://openrouter.ai/docs/features/multimodal/image-generation
 
 ## Environment variables
 

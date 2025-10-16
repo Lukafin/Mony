@@ -239,7 +239,14 @@ def request_image(
     # Build chat completions payload with image modalities per OpenRouter docs
     # Build messages content: use plain string when no references for max compatibility
     if references:
-        content_value = [{"type": "input_text", "text": prompt}, *[ref.payload for ref in references]]
+        # Convert internal reference payloads to chat image_url parts
+        parts: List[dict] = [{"type": "text", "text": prompt}]
+        for ref in references:
+            if "image_url" in ref.payload:
+                parts.append({"type": "image_url", "image_url": {"url": ref.payload["image_url"]}})
+            elif "image_base64" in ref.payload:
+                parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{ref.payload['image_base64']}"}})
+        content_value = parts
     else:
         content_value = prompt
 
