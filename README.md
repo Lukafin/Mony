@@ -11,6 +11,14 @@ personas and generating concept images through the OpenRouter image API.
 - Preview prompts without generating images via `--dry-run` mode.
 - Supply one or more reference images or URLs to steer the generation results.
 
+## Installation
+
+Install the published package from PyPI:
+
+```bash
+pip install mony
+```
+
 ## Prerequisites
 
 1. Create a Python 3.10+ virtual environment and install dependencies:
