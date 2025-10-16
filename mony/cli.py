@@ -13,7 +13,8 @@ from typing import Iterable, List, Optional, Sequence
 
 import requests
 
-API_URL = "https://openrouter.ai/api/v1/images"
+# OpenRouter chat completions endpoint (supports image generation with modalities)
+API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/dall-e-3"
 DEFAULT_IMAGE_SIZE = "1024x1024"
 
@@ -161,6 +162,38 @@ def build_prompt(description: str, prompt_template: str, suffix: str = "") -> st
     return full_prompt
 
 
+def derive_aspect_ratio(size: str) -> Optional[str]:
+    """Convert size into an aspect ratio string acceptable by providers.
+
+    Accepts either WIDTHxHEIGHT or W:H. Returns None if parsing fails.
+    """
+    text = size.strip().lower()
+    # Direct W:H support (e.g., "9:16")
+    if ":" in text:
+        parts = text.split(":", 1)
+        if len(parts) == 2 and parts[0].isdigit() and parts[1].isdigit():
+            return f"{int(parts[0])}:{int(parts[1])}"
+        return None
+    if "x" not in text:
+        return None
+    try:
+        width_text, height_text = text.split("x", 1)
+        width = int(width_text)
+        height = int(height_text)
+        if width <= 0 or height <= 0:
+            return None
+    except ValueError:
+        return None
+
+    def gcd(a: int, b: int) -> int:
+        while b:
+            a, b = b, a % b
+        return a
+
+    d = gcd(width, height)
+    return f"{width // d}:{height // d}"
+
+
 def is_url(value: str) -> bool:
     return value.startswith("http://") or value.startswith("https://")
 
@@ -203,12 +236,28 @@ def request_image(
         "X-Title": "Mony UI Generator",
         "Content-Type": "application/json",
     }
-    payload = {"model": model, "prompt": prompt, "size": size}
+    # Build chat completions payload with image modalities per OpenRouter docs
+    # Build messages content: use plain string when no references for max compatibility
     if references:
-        payload["image[]"] = [
-            {"type": "input_text", "text": prompt},
-            *[ref.payload for ref in references],
-        ]
+        content_value = [{"type": "input_text", "text": prompt}, *[ref.payload for ref in references]]
+    else:
+        content_value = prompt
+
+    payload: dict = {
+        "model": model,
+        "messages": [
+            {
+                "role": "user",
+                "content": content_value,
+            }
+        ],
+        "modalities": ["image", "text"],
+    }
+
+    aspect_ratio = derive_aspect_ratio(size)
+    if aspect_ratio:
+        payload["image_config"] = {"aspect_ratio": aspect_ratio}
+
     response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
     if response.status_code >= 400:
         raise ImageGenerationError(
@@ -217,23 +266,50 @@ def request_image(
     try:
         data = response.json()
     except json.JSONDecodeError as exc:  # pragma: no cover - defensive programming
+        print(f"DEBUG: Response status: {response.status_code}", file=sys.stderr)
+        print(f"DEBUG: Response text: {response.text}", file=sys.stderr)
         raise ImageGenerationError("Failed to parse OpenRouter response as JSON") from exc
 
-    if not isinstance(data, dict) or "data" not in data:
-        raise ImageGenerationError("OpenRouter response missing 'data' field")
+    # Parse images from chat completions-style response
+    if not isinstance(data, dict) or "choices" not in data:
+        raise ImageGenerationError("OpenRouter response missing 'choices' field")
 
-    items = data.get("data")
-    if not items:
-        raise ImageGenerationError("OpenRouter response data is empty")
+    choices = data.get("choices") or []
+    if not choices or not isinstance(choices, list):
+        raise ImageGenerationError("OpenRouter response has no choices")
 
-    image_info = items[0]
-    if "b64_json" in image_info:
-        return base64.b64decode(image_info["b64_json"])
-    if "url" in image_info:
-        download = requests.get(image_info["url"], timeout=60)
-        download.raise_for_status()
-        return download.content
-    raise ImageGenerationError("OpenRouter response did not include image content")
+    message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+    images = message.get("images") or []
+
+    # Fallback: some providers may stream images in content; try to extract if present
+    if not images and isinstance(message.get("content"), list):
+        # Look for dicts with type 'image_url'
+        images = [part for part in message["content"] if isinstance(part, dict) and part.get("type") == "image_url"]
+        # Normalize shape to match expected images format
+        images = [{"image_url": part.get("image_url") or {"url": part.get("url")}} for part in images]
+
+    if not images:
+        raise ImageGenerationError("OpenRouter response did not include images")
+
+    first = images[0]
+    image_url_info = first.get("image_url") or {}
+    url_value = image_url_info.get("url")
+    if not url_value or not isinstance(url_value, str):
+        raise ImageGenerationError("Image URL missing in response")
+
+    if url_value.startswith("data:image/"):
+        # data URL: data:image/png;base64,....
+        try:
+            base64_index = url_value.index(",")
+            b64 = url_value[base64_index + 1 :]
+        except ValueError:
+            raise ImageGenerationError("Malformed data URL for image")
+        return base64.b64decode(b64)
+
+    # Otherwise download the image from the provided URL
+    download = requests.get(url_value, timeout=60)
+    download.raise_for_status()
+    return download.content
 
 
 def save_image(content: bytes, output_dir: pathlib.Path, designer_name: str) -> pathlib.Path:
