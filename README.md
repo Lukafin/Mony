@@ -72,7 +72,7 @@ mony "Smart home control hub" modern \
   --reference https://example.com/layout-inspiration.png
 ```
 
-Generated images are saved under the `outputs/` directory with timestamps.
+Generated images are saved under the `generatedDesigns/` directory with timestamps.
 
 Note: Use an image-capable chat model (output modality includes "image"). See the OpenRouter docs: https://openrouter.ai/docs/features/multimodal/image-generation
 
