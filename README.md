@@ -37,6 +37,20 @@ echo "OPENROUTER_API_KEY=sk-or-..." > .env
 
 Mony includes 8 designer personas: **modern**, **funky**, **conservative**, **brutalist**, **cyberpunk**, **material**, **playful**, **skeuomorphic**
 
+### Streamlit UI
+
+Prefer a visual interface? Launch the Streamlit app to pick personas, enter your
+own prompt, and manage reference images without typing CLI commands:
+
+```bash
+streamlit run mony/ui.py
+```
+
+The UI loads designer personas from the configured directory, lets you upload or
+link reference imagery, and displays generated outputs inline.
+
+### Command line
+
 Generate images for multiple designer personas:
 
 ```bash
