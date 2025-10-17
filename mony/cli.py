@@ -134,7 +134,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--output-dir",
-        default="outputs",
+        default="generatedDesigns",
         help="Directory where generated images will be stored.",
     )
     parser.add_argument(
