@@ -67,22 +67,38 @@ When you're done, exit the app with `Ctrl+C` and deactivate the environment with
 
 ### Command line
 
-Generate images for multiple designer personas:
+#### Running from source (without installation)
+
+If you haven't installed the package with `pip install -e .`, you can run the CLI directly using Python's `-m` flag:
+
+```bash
+# activate your virtual environment first
+source .venv/bin/activate
+
+# run the CLI
+python -m mony "Cross-platform personal finance dashboard" modern funky conservative
+```
+
+#### Running after installation
+
+Once installed with `pip install -e .`, you can use the `mony` command directly:
 
 ```bash
 mony "Cross-platform personal finance dashboard" modern funky conservative
 ```
 
+#### Examples
+
 Run in dry-run mode to inspect the assembled prompts without making API calls:
 
 ```bash
-mony "Meditation mobile onboarding flow" modern funky --dry-run
+python -m mony "Meditation mobile onboarding flow" modern funky --dry-run
 ```
 
 Customize options such as aspect ratio/size, prompt suffix, and output directory:
 
 ```bash
-mony "AI writing assistant workspace" modern \
+python -m mony "AI writing assistant workspace" modern \
   --size 9:16 \
   --prompt-suffix "Render as a Figma mockup"
 ```
@@ -96,7 +112,7 @@ sent as data URLs within the chat message; URLs are passed directly. Repeat `--r
 to include multiple images:
 
 ```bash
-mony "Smart home control hub" modern \
+python -m mony "Smart home control hub" modern \
   --size 9:16 \
   --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png
