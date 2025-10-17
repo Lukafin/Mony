@@ -37,22 +37,68 @@ echo "OPENROUTER_API_KEY=sk-or-..." > .env
 
 Mony includes 8 designer personas: **modern**, **funky**, **conservative**, **brutalist**, **cyberpunk**, **material**, **playful**, **skeuomorphic**
 
-Generate images for multiple designer personas:
+### Streamlit UI
+
+Prefer a visual interface? Launch the Streamlit app to pick personas, enter your
+own prompt, and manage reference images without typing CLI commands:
+
+```bash
+streamlit run mony/ui.py
+```
+
+The UI loads designer personas from the configured directory, lets you upload or
+link reference imagery, and displays generated outputs inline.
+
+#### Run the Streamlit UI inside a virtual environment
+
+```bash
+# create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# install the minimum dependencies for the UI
+python -m pip install -r requirements.txt
+
+# launch Streamlit
+python -m streamlit run mony/ui.py
+```
+
+When you're done, exit the app with `Ctrl+C` and deactivate the environment with `deactivate`.
+
+### Command line
+
+#### Running from source (without installation)
+
+If you haven't installed the package with `pip install -e .`, you can run the CLI directly using Python's `-m` flag:
+
+```bash
+# activate your virtual environment first
+source .venv/bin/activate
+
+# run the CLI
+python -m mony "Cross-platform personal finance dashboard" modern funky conservative
+```
+
+#### Running after installation
+
+Once installed with `pip install -e .`, you can use the `mony` command directly:
 
 ```bash
 mony "Cross-platform personal finance dashboard" modern funky conservative
 ```
 
+#### Examples
+
 Run in dry-run mode to inspect the assembled prompts without making API calls:
 
 ```bash
-mony "Meditation mobile onboarding flow" modern funky --dry-run
+python -m mony "Meditation mobile onboarding flow" modern funky --dry-run
 ```
 
 Customize options such as aspect ratio/size, prompt suffix, and output directory:
 
 ```bash
-mony "AI writing assistant workspace" modern \
+python -m mony "AI writing assistant workspace" modern \
   --size 9:16 \
   --prompt-suffix "Render as a Figma mockup"
 ```
@@ -66,7 +112,7 @@ sent as data URLs within the chat message; URLs are passed directly. Repeat `--r
 to include multiple images:
 
 ```bash
-mony "Smart home control hub" modern \
+python -m mony "Smart home control hub" modern \
   --size 9:16 \
   --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png

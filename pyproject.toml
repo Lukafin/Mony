@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "mony"
-version = "0.1.3"
+version = "0.1.4"
 description = "Generate UI concept images by combining project briefs with designer personas and the OpenRouter image API"
 readme = "README.md"
 requires-python = ">=3.9"
