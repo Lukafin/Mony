@@ -9,7 +9,7 @@ from typing import TYPE_CHECKING, List, Sequence
 
 import streamlit as st
 
-from . import cli
+from mony import cli
 
 if TYPE_CHECKING:
     from streamlit.runtime.uploaded_file_manager import UploadedFile

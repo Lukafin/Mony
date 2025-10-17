@@ -49,6 +49,22 @@ streamlit run mony/ui.py
 The UI loads designer personas from the configured directory, lets you upload or
 link reference imagery, and displays generated outputs inline.
 
+#### Run the Streamlit UI inside a virtual environment
+
+```bash
+# create and activate a virtual environment
+python3 -m venv .venv
+source .venv/bin/activate
+
+# install the minimum dependencies for the UI
+python -m pip install -r requirements.txt
+
+# launch Streamlit
+python -m streamlit run mony/ui.py
+```
+
+When you're done, exit the app with `Ctrl+C` and deactivate the environment with `deactivate`.
+
 ### Command line
 
 Generate images for multiple designer personas:
