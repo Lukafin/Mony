@@ -5,18 +5,54 @@ import argparse
 import base64
 import datetime as dt
 import json
+import logging
 import os
 import pathlib
 import sys
+import time
+import threading
 from dataclasses import dataclass
-from typing import Iterable, List, Optional, Sequence
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple
 
 import requests
+from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # OpenRouter chat completions endpoint (supports image generation with modalities)
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
 DEFAULT_MODEL = "openai/dall-e-3"
 DEFAULT_IMAGE_SIZE = "1024x1024"
+LOG_LEVEL_NAMES = {
+    "CRITICAL",
+    "ERROR",
+    "WARNING",
+    "INFO",
+    "DEBUG",
+}
+
+
+logger = logging.getLogger("mony.cli")
+
+
+def normalize_log_level(value: str) -> str:
+    """Normalize user-provided log level strings."""
+
+    upper_value = value.strip().upper()
+    if upper_value == "WARN":
+        upper_value = "WARNING"
+    if upper_value not in LOG_LEVEL_NAMES:
+        valid = ", ".join(sorted(LOG_LEVEL_NAMES))
+        raise argparse.ArgumentTypeError(f"Invalid log level '{value}'. Choose one of: {valid}")
+    return upper_value
+
+
+def configure_logging(level_name: str) -> None:
+    """Configure root logging once based on the requested level."""
+
+    level = getattr(logging, level_name, logging.INFO)
+    logging.basicConfig(
+        level=level,
+        format="%(asctime)s [%(levelname)s] %(threadName)s %(name)s: %(message)s",
+    )
 
 
 @dataclass
@@ -128,6 +164,12 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         "--env-file",
         default=".env",
         help="Path to a .env file containing OPENROUTER_API_KEY.",
+    )
+    parser.add_argument(
+        "--log-level",
+        default="INFO",
+        type=normalize_log_level,
+        help="Logging level to emit (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
     )
     return parser.parse_args(argv)
 
@@ -265,8 +307,32 @@ def request_image(
     if aspect_ratio:
         payload["image_config"] = {"aspect_ratio": aspect_ratio}
 
+    prompt_preview = prompt.strip().replace("\n", " ")[:160]
+    references_count = len(references) if references else 0
+    logger.debug(
+        "Submitting request to model=%s size=%s aspect_ratio=%s prompt_preview=%r references=%d",
+        model,
+        size,
+        payload.get("image_config", {}).get("aspect_ratio"),
+        prompt_preview,
+        references_count,
+    )
+    request_start = time.perf_counter()
     response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+    elapsed = time.perf_counter() - request_start
+    logger.debug(
+        "Received response for model=%s status=%s in %.2fs",
+        model,
+        response.status_code,
+        elapsed,
+    )
     if response.status_code >= 400:
+        logger.error(
+            "OpenRouter API responded with status=%s for model=%s: %s",
+            response.status_code,
+            model,
+            response.text[:500],
+        )
         raise ImageGenerationError(
             f"OpenRouter API returned status {response.status_code}: {response.text}"
         )
@@ -276,6 +342,17 @@ def request_image(
         print(f"DEBUG: Response status: {response.status_code}", file=sys.stderr)
         print(f"DEBUG: Response text: {response.text}", file=sys.stderr)
         raise ImageGenerationError("Failed to parse OpenRouter response as JSON") from exc
+
+    if logger.isEnabledFor(logging.DEBUG):
+        try:
+            serialized = json.dumps(data)
+        except (TypeError, ValueError):
+            serialized = str(data)
+        logger.debug(
+            "Raw provider response for model=%s: %s",
+            model,
+            serialized[:2000],
+        )
 
     # Parse images from chat completions-style response
     if not isinstance(data, dict) or "choices" not in data:
@@ -296,6 +373,12 @@ def request_image(
         images = [{"image_url": part.get("image_url") or {"url": part.get("url")}} for part in images]
 
     if not images:
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(
+                "Response for model=%s missing images; message payload: %r",
+                model,
+                message,
+            )
         raise ImageGenerationError("OpenRouter response did not include images")
 
     first = images[0]
@@ -314,6 +397,7 @@ def request_image(
         return base64.b64decode(b64)
 
     # Otherwise download the image from the provided URL
+    logger.debug("Downloading image asset for model=%s from %s", model, url_value)
     download = requests.get(url_value, timeout=60)
     download.raise_for_status()
     return download.content
@@ -328,8 +412,80 @@ def save_image(content: bytes, output_dir: pathlib.Path, designer_name: str) -> 
     return path
 
 
+def generate_image_for_designer(
+    *,
+    api_key: str,
+    designer_dir: pathlib.Path,
+    output_dir: pathlib.Path,
+    description: str,
+    designer_name: str,
+    model: str,
+    size: str,
+    prompt_suffix: str,
+    references: Sequence[ReferenceInput],
+) -> Tuple[str, pathlib.Path]:
+    designer_prompt = load_designer_prompt(designer_dir, designer_name)
+    full_prompt = build_prompt(description, designer_prompt.prompt, prompt_suffix)
+    # Retry transient failures, e.g., provider returns no images
+    max_attempts = 3
+    for attempt_index in range(max_attempts):
+        try:
+            attempt_number = attempt_index + 1
+            logger.info(
+                "Generating image for designer=%s attempt=%d/%d model=%s size=%s references=%d",
+                designer_name,
+                attempt_number,
+                max_attempts,
+                model,
+                size,
+                len(references),
+            )
+            image_bytes = request_image(
+                api_key,
+                full_prompt,
+                model,
+                size,
+                references=references,
+            )
+            break
+        except (ImageGenerationError, requests.RequestException) as exc:
+            is_last = attempt_index == max_attempts - 1
+            if is_last:
+                logger.error(
+                    "Exhausted retries for designer=%s after %d attempts (last_error=%s: %s)",
+                    designer_name,
+                    max_attempts,
+                    type(exc).__name__,
+                    exc,
+                    exc_info=logger.isEnabledFor(logging.DEBUG),
+                )
+                raise
+            delay_seconds = 1.0 * (attempt_index + 1)
+            logger.warning(
+                "Retrying designer=%s due to %s: %s (attempt=%d/%d) sleeping=%.1fs",
+                designer_name,
+                type(exc).__name__,
+                exc,
+                attempt_number,
+                max_attempts,
+                delay_seconds,
+                exc_info=logger.isEnabledFor(logging.DEBUG),
+            )
+            time.sleep(delay_seconds)
+    image_path = save_image(image_bytes, output_dir, designer_prompt.name)
+    logger.info(
+        "Saved image for designer=%s at %s (thread=%s)",
+        designer_prompt.name,
+        image_path,
+        threading.current_thread().name,
+    )
+    return designer_prompt.name, image_path
+
+
 def main(argv: Optional[Iterable[str]] = None) -> int:
     args = parse_args(argv)
+
+    configure_logging(args.log_level)
 
     load_env_file(pathlib.Path(args.env_file))
     api_key = os.environ.get("OPENROUTER_API_KEY")
@@ -348,15 +504,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
-    results = []
-    for name in args.designers:
-        try:
-            designer_prompt = load_designer_prompt(designer_dir, name)
-        except DesignerPromptError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        full_prompt = build_prompt(args.description, designer_prompt.prompt, args.prompt_suffix)
-        if args.dry_run:
+    results: List[Tuple[str, pathlib.Path]] = []
+    # Dry-run preserves sequential prompt printing for readability
+    if args.dry_run:
+        for name in args.designers:
+            try:
+                designer_prompt = load_designer_prompt(designer_dir, name)
+            except DesignerPromptError as exc:
+                print(str(exc), file=sys.stderr)
+                return 1
+            full_prompt = build_prompt(args.description, designer_prompt.prompt, args.prompt_suffix)
             print(f"=== {designer_prompt.name} ===")
             print(full_prompt)
             if references:
@@ -364,30 +521,71 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 for ref in references:
                     print(f"  - {ref.source}")
             print()
-            continue
-        try:
-            image_bytes = request_image(
-                api_key,
-                full_prompt,
-                args.model,
-                args.size,
-                references=references,
-            )
-        except ImageGenerationError as exc:
-            print(str(exc), file=sys.stderr)
-            return 1
-        except requests.RequestException as exc:
-            print(f"Failed to call OpenRouter API: {exc}", file=sys.stderr)
-            return 1
-        image_path = save_image(image_bytes, output_dir, designer_prompt.name)
-        results.append((designer_prompt.name, image_path))
-
-    if args.dry_run:
         return 0
+
+    # Parallelize per-designer image generation
+    errors: List[str] = []
+    results_map: Dict[str, pathlib.Path] = {}
+    try:
+        max_workers = min(8, max(1, len(args.designers)))
+        logger.info(
+            "Starting parallel generation for %d designers with max_workers=%d",
+            len(args.designers),
+            max_workers,
+        )
+        with ThreadPoolExecutor(max_workers=max_workers) as executor:
+            future_to_name = {
+                executor.submit(
+                    generate_image_for_designer,
+                    api_key=api_key,
+                    designer_dir=designer_dir,
+                    output_dir=output_dir,
+                    description=args.description,
+                    designer_name=name,
+                    model=args.model,
+                    size=args.size,
+                    prompt_suffix=args.prompt_suffix,
+                    references=references,
+                ): name
+                for name in args.designers
+            }
+
+            for future in as_completed(future_to_name):
+                name = future_to_name[future]
+                try:
+                    designer_name, image_path = future.result()
+                    results_map[designer_name] = image_path
+                    logger.debug(
+                        "Future completed for designer=%s image_path=%s",
+                        designer_name,
+                        image_path,
+                    )
+                except DesignerPromptError as exc:
+                    errors.append(str(exc))
+                except ImageGenerationError as exc:
+                    errors.append(str(exc))
+                except requests.RequestException as exc:
+                    errors.append(f"Failed to call OpenRouter API for {name}: {exc}")
+    except Exception as exc:
+        print(f"Unexpected error during parallel generation: {exc}", file=sys.stderr)
+        return 1
+
+    # Preserve input order in final output
+    for name in args.designers:
+        if name in results_map:
+            results.append((name, results_map[name]))
+
+    if errors:
+        for msg in errors:
+            print(msg, file=sys.stderr)
+        # Continue to print any successful results below, but exit non-zero
+        exit_code = 1
+    else:
+        exit_code = 0
 
     for designer_name, image_path in results:
         print(f"Generated image for {designer_name}: {image_path}")
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
