@@ -11,57 +11,64 @@ personas and generating concept images through the OpenRouter image API.
 - Preview prompts without generating images via `--dry-run` mode.
 - Supply one or more reference images or URLs to steer the generation results.
 
-## Prerequisites
+## Installation
 
-1. Create a Python 3.10+ virtual environment and install dependencies:
+Requires Python 3.9+
 
-   ```bash
-   pip install -r requirements.txt
-   ```
+Install locally:
 
-2. Create a `.env` file in the project root with your OpenRouter key:
+```bash
+pip install -e .
+```
 
-   ```bash
-   echo "OPENROUTER_API_KEY=sk-or-..." > .env
-   ```
+Or from GitHub:
+
+```bash
+pip install git+https://github.com/Lukafin/mony.git
+```
+
+Create a `.env` file in your working directory with your OpenRouter key:
+
+```bash
+echo "OPENROUTER_API_KEY=sk-or-..." > .env
+```
 
 ## Usage
 
-Designer prompts live inside the `designers/` directory. The CLI resolves the
-provided names to markdown files (e.g. `modern` → `designers/modern.md`).
+Mony includes 8 designer personas: **modern**, **funky**, **conservative**, **brutalist**, **cyberpunk**, **material**, **playful**, **skeuomorphic**
 
 Generate images for multiple designer personas:
 
 ```bash
-python -m mony "Cross-platform personal finance dashboard" modern funky conservative
+mony "Cross-platform personal finance dashboard" modern funky conservative
 ```
 
 Run in dry-run mode to inspect the assembled prompts without making API calls:
 
 ```bash
-python -m mony "Meditation mobile onboarding flow" modern funky --dry-run
+mony "Meditation mobile onboarding flow" modern funky --dry-run
 ```
 
-Customize options such as model, aspect ratio/size, prompt suffix, and output directory:
+Customize options such as aspect ratio/size, prompt suffix, and output directory:
 
 ```bash
-python -m mony "AI writing assistant workspace" modern \
-  --model google/gemini-2.5-flash-image-preview \
+mony "AI writing assistant workspace" modern \
   --size 9:16 \
   --prompt-suffix "Render as a Figma mockup"
 ```
 
 `--size` accepts `WIDTHxHEIGHT` or `W:H` (e.g., `768x1344` or `9:16`). When supported by the model, this maps to `image_config.aspect_ratio`.
 
+Default model is `google/gemini-2.5-flash-image-preview`. You can override with `--model`.
+
 Provide reference imagery from a local file or URL. Local files are base64-inlined and
 sent as data URLs within the chat message; URLs are passed directly. Repeat `--reference`
 to include multiple images:
 
 ```bash
-python -m mony "Smart home control hub" modern \
-  --model google/gemini-2.5-flash-image-preview \
+mony "Smart home control hub" modern \
   --size 9:16 \
-  --reference ./referenceImages/promo.png \
+  --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png
 ```
 

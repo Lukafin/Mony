@@ -10,6 +10,21 @@ pip install -e .
 mony "Your UI description" modern funky
 ```
 
+## Available Designer Personas
+
+Mony includes 8 built-in designer personas:
+
+- **modern** - Cutting-edge, contemporary design trends
+- **funky** - Experimental, playful, unexpected layouts
+- **conservative** - Classic, professional, traditional approach
+- **brutalist** - Raw, minimalist, bold typography
+- **cyberpunk** - Neon, futuristic, high-tech aesthetics
+- **material** - Google Material Design principles
+- **playful** - Fun, whimsical, colorful interfaces
+- **skeuomorphic** - Realistic textures and physical metaphors
+
+Use any combination: `mony "description" modern cyberpunk playful`
+
 ---
 
 ## Installation Options
@@ -68,9 +83,8 @@ mony "Cross-platform personal finance dashboard" modern funky conservative
 # Dry-run mode (preview prompts without API calls)
 mony "Meditation mobile onboarding flow" modern funky --dry-run
 
-# Custom model and size
-mony "AI writing assistant workspace" modern \
-  --model google/gemini-2.5-flash-image-preview \
+# Custom size (model defaults to google/gemini-2.5-flash-image-preview)
+mony "AI writing assistant workspace" modern brutalist \
   --size 9:16
 
 # With reference images
@@ -249,7 +263,7 @@ pip install --force-reinstall -e .
 
 ### Python version error
 
-Mony requires Python 3.10+. Check your version:
+Mony requires Python 3.9+. Check your version:
 
 ```bash
 python --version

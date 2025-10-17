@@ -29,6 +29,13 @@ LOG_LEVEL_NAMES = {
     "DEBUG",
 }
 
+# Find the bundled designers directory (works whether installed via pip or run locally)
+_PACKAGE_DIR = pathlib.Path(__file__).parent
+DEFAULT_DESIGNER_DIR = _PACKAGE_DIR / "designers"
+if not DEFAULT_DESIGNER_DIR.exists():
+    # Fallback for running from source
+    DEFAULT_DESIGNER_DIR = _PACKAGE_DIR.parent / "designers"
+
 
 logger = logging.getLogger("mony.cli")
 
@@ -122,7 +129,7 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "--designer-dir",
-        default="designers",
+        default=str(DEFAULT_DESIGNER_DIR),
         help="Directory containing designer prompt markdown files.",
     )
     parser.add_argument(

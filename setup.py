@@ -9,11 +9,13 @@ setup(
     description="Generate UI concept images by combining project briefs with designer personas and the OpenRouter image API",
     long_description=open("README.md").read(),
     long_description_content_type="text/markdown",
-    author="Your Name",
-    author_email="your.email@example.com",
+    author="Luka Finzgar",
     url="https://github.com/Lukafin/mony",
     license="MIT",
     packages=find_packages(),
+    package_data={
+        "mony": ["designers/*.md"],
+    },
     python_requires=">=3.9",
     install_requires=[
         "requests>=2.31.0",
