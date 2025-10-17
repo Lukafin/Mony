@@ -2,3 +2,26 @@ __pycache__/
 *.pyc
 .env
 outputs/
+
+# Build artifacts
+dist/
+build/
+*.egg-info/
+.eggs/
+
+# Python
+.venv/
+venv/
+env/
+.Python
+
+# Development
+.pytest_cache/
+.coverage
+.ruff_cache/
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+.DS_Store
