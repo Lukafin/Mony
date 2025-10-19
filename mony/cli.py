@@ -249,6 +249,13 @@ def extract_text_from_perplexity_message(message: object) -> str:
     return str(content)
 
 
+def strip_perplexity_think_blocks(text: str) -> str:
+    """Remove Perplexity <think> ... </think> segments from responses."""
+
+    pattern = re.compile(r"<think>.*?</think>\s*", re.IGNORECASE | re.DOTALL)
+    return re.sub(pattern, "", text)
+
+
 def research_trendy_designer_prompt(
     designer_dir: pathlib.Path, name: str, *, client: object
 ) -> pathlib.Path:
@@ -318,6 +325,7 @@ def research_trendy_designer_prompt(
     if message is None:
         raise DesignerResearchError("Perplexity response missing message content")
     text = extract_text_from_perplexity_message(message).strip()
+    text = strip_perplexity_think_blocks(text).strip()
     if not text:
         raise DesignerResearchError("Perplexity response did not contain usable text")
 

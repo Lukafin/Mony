@@ -82,11 +82,14 @@ def _research_designer_via_perplexity(
         )
 
     try:
-        from perplexityai import Perplexity
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise cli.DesignerResearchError(
-            "Install the 'perplexityai' package to enable designer research."
-        ) from exc
+        from perplexityai import Perplexity  # type: ignore
+    except ImportError:
+        try:  # pragma: no cover - optional dependency
+            from perplexity import Perplexity  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise cli.DesignerResearchError(
+                "Install the Perplexity client library via 'pip install perplexityai'."
+            ) from exc
 
     client = Perplexity(api_key=api_key.strip())
     path = cli.research_trendy_designer_prompt(designer_dir, persona_name, client=client)
@@ -140,162 +143,172 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    st.subheader("Research trendy designer personas")
-    research_name = st.text_input(
-        "Persona name to research",
-        placeholder="e.g., Neo Brutalist Visionary",
-    )
-    if "_latest_research" not in st.session_state:
-        st.session_state["_latest_research"] = None
-
-    if st.button("Research persona", type="secondary"):
-        if not research_name.strip():
-            st.error("Enter a persona name before running research.")
-        else:
-            with st.spinner("Researching latest design trends..."):
-                try:
-                    path, text = _research_designer_via_perplexity(
-                        designer_dir, research_name.strip(), perplexity_api_key
-                    )
-                except cli.DesignerResearchError as exc:
-                    st.error(str(exc))
-                except Exception as exc:  # pragma: no cover - runtime feedback
-                    st.error(f"Unexpected error while researching persona: {exc}")
-                else:
-                    st.session_state["_latest_research"] = {
-                        "name": research_name.strip(),
-                        "path": str(path),
-                        "text": text,
-                    }
-                    st.success(
-                        f"Saved updated persona prompt to {path.name}. It is now available in the selector below."
-                    )
-
-    latest_research = st.session_state.get("_latest_research")
-    if latest_research:
-        with st.expander(
-            f"Latest researched persona: {latest_research['name']}", expanded=False
-        ):
-            st.markdown(
-                f"**Stored at:** `{latest_research['path']}`\n\n"
-                "You can review or edit the generated prompt below.",
-            )
-            st.text_area(
-                "Persona prompt",
-                value=latest_research["text"],
-                height=200,
-                disabled=True,
-            )
-
     available_designers = _load_available_designers(designer_dir)
 
-    st.subheader("Project brief")
-    description = st.text_area(
-        "Describe the UI you would like to visualize", height=120
+    research_tab, generate_tab = st.tabs(
+        ["Research personas", "Generate images"]
     )
 
-    st.subheader("Designer persona")
-    col1, col2 = st.columns(2)
-    with col1:
-        selected_designers = st.multiselect(
-            "Select built-in designers", available_designers
+    with research_tab:
+        st.subheader("Research trendy designer personas")
+        research_name = st.text_input(
+            "Persona name to research",
+            placeholder="e.g., Neo Brutalist Visionary",
         )
-        if not available_designers:
-            st.info(
-                "No designer prompts found. Adjust the designer directory path in the sidebar."
+        if "_latest_research" not in st.session_state:
+            st.session_state["_latest_research"] = None
+
+        if st.button("Research persona", type="secondary"):
+            if not research_name.strip():
+                st.error("Enter a persona name before running research.")
+            else:
+                with st.spinner("Researching latest design trends..."):
+                    try:
+                        path, text = _research_designer_via_perplexity(
+                            designer_dir, research_name.strip(), perplexity_api_key
+                        )
+                    except cli.DesignerResearchError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # pragma: no cover - runtime feedback
+                        st.error(f"Unexpected error while researching persona: {exc}")
+                    else:
+                        st.session_state["_latest_research"] = {
+                            "name": research_name.strip(),
+                            "path": str(path),
+                            "text": text,
+                        }
+                        st.success(
+                            f"Saved updated persona prompt to {path.name}. It is now available in the selector on the Generate tab."
+                        )
+
+        latest_research = st.session_state.get("_latest_research")
+        if latest_research:
+            with st.expander(
+                f"Latest researched persona: {latest_research['name']}", expanded=False
+            ):
+                st.markdown(
+                    f"**Stored at:** `{latest_research['path']}`\n\n"
+                    "Review the generated prompt below. Edit directly in the file if you need tweaks."
+                )
+                st.text_area(
+                    "Persona prompt",
+                    value=latest_research["text"],
+                    height=200,
+                    disabled=True,
+                )
+
+    with generate_tab:
+        st.subheader("Project brief")
+        description = st.text_area(
+            "Describe the UI you would like to visualize", height=120
+        )
+
+        st.subheader("Designer persona")
+        col1, col2 = st.columns(2)
+        with col1:
+            selected_designers = st.multiselect(
+                "Select built-in designers", available_designers
+            )
+            if not available_designers:
+                st.info(
+                    "No designer prompts found. Adjust the designer directory path in the sidebar."
+                )
+
+        with col2:
+            custom_name = st.text_input("Custom persona name", value="")
+            custom_prompt = st.text_area(
+                "Custom persona prompt",
+                value="",
+                height=160,
+                help=(
+                    "Provide your own persona instructions. The project brief and optional "
+                    "suffix will be appended automatically."
+                ),
             )
 
-    with col2:
-        custom_name = st.text_input("Custom persona name", value="")
-        custom_prompt = st.text_area(
-            "Custom persona prompt", value="", height=160,
-            help=(
-                "Provide your own persona instructions. The project brief and optional "
-                "suffix will be appended automatically."
-            ),
+        st.subheader("Reference images")
+        uploaded_refs = st.file_uploader(
+            "Upload reference images",
+            type=["png", "jpg", "jpeg", "webp"],
+            accept_multiple_files=True,
+        )
+        reference_urls_text = st.text_area(
+            "Reference image URLs (one per line)", value="", height=80
         )
 
-    st.subheader("Reference images")
-    uploaded_refs = st.file_uploader(
-        "Upload reference images", type=["png", "jpg", "jpeg", "webp"], accept_multiple_files=True
-    )
-    reference_urls_text = st.text_area(
-        "Reference image URLs (one per line)", value="", height=80
-    )
-
-    references: List[cli.ReferenceInput] = []
-    url_error: str | None = None
-    if reference_urls_text.strip():
-        try:
-            references.extend(_prepare_reference_urls(reference_urls_text))
-        except cli.ReferenceInputError as exc:
-            url_error = str(exc)
-    references.extend(_uploaded_files_to_references(uploaded_refs or []))
-
-    if url_error:
-        st.error(url_error)
-
-    if st.button("Generate images", type="primary"):
-        if not description.strip():
-            st.error("Please provide a project description before generating images.")
-        elif not api_key.strip():
-            st.error("Please enter your OpenRouter API key in the sidebar.")
-        else:
-            ensure_dir_error = None
+        references: List[cli.ReferenceInput] = []
+        url_error: str | None = None
+        if reference_urls_text.strip():
             try:
-                cli.ensure_output_dir(output_dir)
-            except OSError as exc:  # pragma: no cover - user environment dependent
-                ensure_dir_error = str(exc)
-            if ensure_dir_error:
-                st.error(f"Failed to create output directory: {ensure_dir_error}")
+                references.extend(_prepare_reference_urls(reference_urls_text))
+            except cli.ReferenceInputError as exc:
+                url_error = str(exc)
+        references.extend(_uploaded_files_to_references(uploaded_refs or []))
+
+        if url_error:
+            st.error(url_error)
+
+        if st.button("Generate images", type="primary"):
+            if not description.strip():
+                st.error("Please provide a project description before generating images.")
+            elif not api_key.strip():
+                st.error("Please enter your OpenRouter API key in the sidebar.")
             else:
-                results = []
-                with st.spinner("Generating images..."):
-                    for designer_name in selected_designers:
-                        try:
-                            _, image_path = cli.generate_image_for_designer(
-                                api_key=api_key.strip(),
-                                designer_dir=designer_dir,
-                                output_dir=output_dir,
-                                description=description,
-                                designer_name=designer_name,
-                                model=model.strip(),
-                                size=size.strip(),
-                                prompt_suffix=prompt_suffix,
-                                references=references,
-                            )
-                            results.append((designer_name, image_path))
-                        except Exception as exc:  # pragma: no cover - runtime feedback
-                            st.error(f"Failed to generate for {designer_name}: {exc}")
-
-                    if custom_prompt.strip():
-                        persona_name = custom_name.strip() or "custom"
-                        try:
-                            full_prompt = cli.build_prompt(
-                                description, custom_prompt, prompt_suffix
-                            )
-                            image_bytes = cli.request_image(
-                                api_key.strip(),
-                                full_prompt,
-                                model.strip(),
-                                size.strip(),
-                                references=references,
-                            )
-                            saved_path = cli.save_image(
-                                image_bytes, output_dir, persona_name
-                            )
-                            results.append((persona_name, saved_path))
-                        except Exception as exc:  # pragma: no cover - runtime feedback
-                            st.error(f"Failed to generate for custom persona: {exc}")
-
-                if results:
-                    st.success("Generation complete!")
-                    for persona, image_path in results:
-                        _display_generated_image(image_path, persona)
+                ensure_dir_error = None
+                try:
+                    cli.ensure_output_dir(output_dir)
+                except OSError as exc:  # pragma: no cover - user environment dependent
+                    ensure_dir_error = str(exc)
+                if ensure_dir_error:
+                    st.error(f"Failed to create output directory: {ensure_dir_error}")
                 else:
-                    st.info(
-                        "No images were generated. Ensure you selected a designer or provided a custom persona."
-                    )
+                    results = []
+                    with st.spinner("Generating images..."):
+                        for designer_name in selected_designers:
+                            try:
+                                _, image_path = cli.generate_image_for_designer(
+                                    api_key=api_key.strip(),
+                                    designer_dir=designer_dir,
+                                    output_dir=output_dir,
+                                    description=description,
+                                    designer_name=designer_name,
+                                    model=model.strip(),
+                                    size=size.strip(),
+                                    prompt_suffix=prompt_suffix,
+                                    references=references,
+                                )
+                                results.append((designer_name, image_path))
+                            except Exception as exc:  # pragma: no cover - runtime feedback
+                                st.error(f"Failed to generate for {designer_name}: {exc}")
+
+                        if custom_prompt.strip():
+                            persona_name = custom_name.strip() or "custom"
+                            try:
+                                full_prompt = cli.build_prompt(
+                                    description, custom_prompt, prompt_suffix
+                                )
+                                image_bytes = cli.request_image(
+                                    api_key.strip(),
+                                    full_prompt,
+                                    model.strip(),
+                                    size.strip(),
+                                    references=references,
+                                )
+                                saved_path = cli.save_image(
+                                    image_bytes, output_dir, persona_name
+                                )
+                                results.append((persona_name, saved_path))
+                            except Exception as exc:  # pragma: no cover - runtime feedback
+                                st.error(f"Failed to generate for custom persona: {exc}")
+
+                    if results:
+                        st.success("Generation complete!")
+                        for persona, image_path in results:
+                            _display_generated_image(image_path, persona)
+                    else:
+                        st.info(
+                            "No images were generated. Ensure you selected a designer or provided a custom persona."
+                        )
 
 
 if __name__ == "__main__":
