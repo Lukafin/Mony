@@ -270,22 +270,43 @@ def research_trendy_designer_prompt(
     )
 
     try:
-        response = client.messages.create(
-            model="sonar-reasoning",
-            messages=[
-                {
-                    "role": "system",
-                    "content": (
-                        "You are a meticulous design trend researcher who writes vivid persona "
-                        "prompts for generating UI concept art."
-                    ),
-                },
-                {
-                    "role": "user",
-                    "content": prompt,
-                },
-            ],
-        )
+        if hasattr(client, "messages"):
+            response = client.messages.create(  # type: ignore[attr-defined]
+                model="sonar-reasoning",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a meticulous design trend researcher who writes vivid persona "
+                            "prompts for generating UI concept art."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+            )
+        elif hasattr(client, "chat") and hasattr(client.chat, "completions"):
+            response = client.chat.completions.create(  # type: ignore[attr-defined]
+                model="sonar-reasoning",
+                messages=[
+                    {
+                        "role": "system",
+                        "content": (
+                            "You are a meticulous design trend researcher who writes vivid persona "
+                            "prompts for generating UI concept art."
+                        ),
+                    },
+                    {
+                        "role": "user",
+                        "content": prompt,
+                    },
+                ],
+                stream=False,
+            )
+        else:  # pragma: no cover - unexpected client interface
+            raise DesignerResearchError("Perplexity client does not expose a supported completion endpoint.")
     except Exception as exc:  # pragma: no cover - network failure handling
         raise DesignerResearchError(f"Failed to call Perplexity API: {exc}") from exc
 
@@ -310,11 +331,14 @@ def run_designer_research(designer_dir: pathlib.Path, names: Sequence[str]) -> N
     if not names:
         return
     try:
-        from perplexityai import Perplexity
-    except ImportError as exc:  # pragma: no cover - optional dependency
-        raise DesignerResearchError(
-            "The 'perplexityai' package is required for --research-designer. Install it via 'pip install perplexityai'."
-        ) from exc
+        from perplexityai import Perplexity  # type: ignore
+    except ImportError:
+        try:  # pragma: no cover - optional dependency
+            from perplexity import Perplexity  # type: ignore
+        except ImportError as exc:  # pragma: no cover - optional dependency
+            raise DesignerResearchError(
+                "The Perplexity client library is required for --research-designer. Install it via 'pip install perplexityai'."
+            ) from exc
 
     api_key = os.environ.get("PERPLEXITY_API_KEY")
     if not api_key:
