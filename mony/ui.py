@@ -71,6 +71,28 @@ def _display_generated_image(path: pathlib.Path, label: str) -> None:
     st.image(str(path), caption=f"{label} – {path.name}")
 
 
+def _research_designer_via_perplexity(
+    designer_dir: pathlib.Path, persona_name: str, api_key: str
+) -> tuple[pathlib.Path, str]:
+    """Research and persist a trendy designer persona using Perplexity."""
+
+    if not api_key.strip():
+        raise cli.DesignerResearchError(
+            "Provide a Perplexity API key before running designer research."
+        )
+
+    try:
+        from perplexityai import Perplexity
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise cli.DesignerResearchError(
+            "Install the 'perplexityai' package to enable designer research."
+        ) from exc
+
+    client = Perplexity(api_key=api_key.strip())
+    path = cli.research_trendy_designer_prompt(designer_dir, persona_name, client=client)
+    return path, path.read_text().strip()
+
+
 def run() -> None:
     """Execute the Streamlit UI."""
 
@@ -107,6 +129,63 @@ def run() -> None:
         model = st.text_input("Model", value=cli.DEFAULT_MODEL)
         size = st.text_input("Image size", value=cli.DEFAULT_IMAGE_SIZE)
         prompt_suffix = st.text_area("Prompt suffix", value="", height=80)
+        perplexity_api_key_default = os.environ.get("PERPLEXITY_API_KEY", "")
+        perplexity_api_key = st.text_input(
+            "Perplexity API key",
+            value=perplexity_api_key_default,
+            type="password",
+            help="Required for researching new designer personas.",
+        )
+
+    if perplexity_api_key:
+        os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
+
+    st.subheader("Research trendy designer personas")
+    research_name = st.text_input(
+        "Persona name to research",
+        placeholder="e.g., Neo Brutalist Visionary",
+    )
+    if "_latest_research" not in st.session_state:
+        st.session_state["_latest_research"] = None
+
+    if st.button("Research persona", type="secondary"):
+        if not research_name.strip():
+            st.error("Enter a persona name before running research.")
+        else:
+            with st.spinner("Researching latest design trends..."):
+                try:
+                    path, text = _research_designer_via_perplexity(
+                        designer_dir, research_name.strip(), perplexity_api_key
+                    )
+                except cli.DesignerResearchError as exc:
+                    st.error(str(exc))
+                except Exception as exc:  # pragma: no cover - runtime feedback
+                    st.error(f"Unexpected error while researching persona: {exc}")
+                else:
+                    st.session_state["_latest_research"] = {
+                        "name": research_name.strip(),
+                        "path": str(path),
+                        "text": text,
+                    }
+                    st.success(
+                        f"Saved updated persona prompt to {path.name}. It is now available in the selector below."
+                    )
+
+    latest_research = st.session_state.get("_latest_research")
+    if latest_research:
+        with st.expander(
+            f"Latest researched persona: {latest_research['name']}", expanded=False
+        ):
+            st.markdown(
+                f"**Stored at:** `{latest_research['path']}`\n\n"
+                "You can review or edit the generated prompt below.",
+            )
+            st.text_area(
+                "Persona prompt",
+                value=latest_research["text"],
+                height=200,
+                disabled=True,
+            )
 
     available_designers = _load_available_designers(designer_dir)
 

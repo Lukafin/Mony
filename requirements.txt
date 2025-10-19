@@ -1,5 +1,6 @@
 # Core dependencies
 requests>=2.31.0
+perplexityai>=0.2.5
 streamlit>=1.33.0
 
 # Development dependencies (optional, install with: pip install -r requirements-dev.txt)

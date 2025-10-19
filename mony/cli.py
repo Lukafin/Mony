@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import pathlib
+import re
 import sys
 import time
 import threading
@@ -80,6 +81,10 @@ class ImageGenerationError(RuntimeError):
 
 class ReferenceInputError(RuntimeError):
     """Raised when reference image inputs cannot be prepared."""
+
+
+class DesignerResearchError(RuntimeError):
+    """Raised when designer research via the Perplexity API fails."""
 
 
 @dataclass
@@ -173,6 +178,16 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Path to a .env file containing OPENROUTER_API_KEY.",
     )
     parser.add_argument(
+        "--research-designer",
+        action="append",
+        default=[],
+        metavar="NAME",
+        help=(
+            "Generate or refresh a designer prompt markdown file named NAME using Perplexity "
+            "before running. Requires the PERPLEXITY_API_KEY environment variable."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         type=normalize_log_level,
@@ -201,6 +216,115 @@ def load_designer_prompt(designer_dir: pathlib.Path, name: str) -> DesignerPromp
 
 def ensure_output_dir(path: pathlib.Path) -> None:
     path.mkdir(parents=True, exist_ok=True)
+
+
+def sanitize_designer_slug(name: str) -> str:
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", name.strip().lower())
+    slug = slug.strip("-")
+    if not slug:
+        slug = "designer"
+    return slug
+
+
+def extract_text_from_perplexity_message(message: object) -> str:
+    content = getattr(message, "content", None)
+    if isinstance(content, list):
+        texts: List[str] = []
+        for part in content:
+            if isinstance(part, str):
+                candidate = part
+            else:
+                candidate = getattr(part, "text", None)
+                if candidate is None and isinstance(part, dict):
+                    candidate = part.get("text")
+            if candidate:
+                candidate = str(candidate).strip()
+                if candidate:
+                    texts.append(candidate)
+        return "\n\n".join(texts)
+    if isinstance(content, str):
+        return content
+    if content is None:
+        return ""
+    return str(content)
+
+
+def research_trendy_designer_prompt(
+    designer_dir: pathlib.Path, name: str, *, client: object
+) -> pathlib.Path:
+    slug = sanitize_designer_slug(name)
+    filename = designer_dir / f"{slug}.md"
+
+    current_year = dt.datetime.utcnow().year
+    logger.info("Researching updated designer persona for %s", slug)
+
+    prompt = (
+        "You are an award-winning UI creative director who researches cutting-edge digital "
+        "product design trends. Using reputable, current sources, summarize the most "
+        "influential UI/UX aesthetics, interaction patterns, and visual motifs gaining "
+        f"traction in {current_year}. Synthesize them into a concise creative brief for a "
+        f"designer persona named '{name}'. Focus on color palettes, typography, layout "
+        "structures, motion principles, and signature flourishes that should inspire UI "
+        "concept art. Provide actionable instructions suitable for a text-to-image prompt. "
+        "Limit the response to 4-6 sentences without markdown headings."
+    )
+
+    try:
+        response = client.messages.create(
+            model="sonar-reasoning",
+            messages=[
+                {
+                    "role": "system",
+                    "content": (
+                        "You are a meticulous design trend researcher who writes vivid persona "
+                        "prompts for generating UI concept art."
+                    ),
+                },
+                {
+                    "role": "user",
+                    "content": prompt,
+                },
+            ],
+        )
+    except Exception as exc:  # pragma: no cover - network failure handling
+        raise DesignerResearchError(f"Failed to call Perplexity API: {exc}") from exc
+
+    choices = getattr(response, "choices", None)
+    if not choices:
+        raise DesignerResearchError("Perplexity response did not include choices")
+    first_choice = choices[0]
+    message = getattr(first_choice, "message", None)
+    if message is None:
+        raise DesignerResearchError("Perplexity response missing message content")
+    text = extract_text_from_perplexity_message(message).strip()
+    if not text:
+        raise DesignerResearchError("Perplexity response did not contain usable text")
+
+    ensure_output_dir(designer_dir)
+    filename.write_text(text + "\n")
+    logger.info("Saved researched designer prompt to %s", filename)
+    return filename
+
+
+def run_designer_research(designer_dir: pathlib.Path, names: Sequence[str]) -> None:
+    if not names:
+        return
+    try:
+        from perplexityai import Perplexity
+    except ImportError as exc:  # pragma: no cover - optional dependency
+        raise DesignerResearchError(
+            "The 'perplexityai' package is required for --research-designer. Install it via 'pip install perplexityai'."
+        ) from exc
+
+    api_key = os.environ.get("PERPLEXITY_API_KEY")
+    if not api_key:
+        raise DesignerResearchError(
+            "PERPLEXITY_API_KEY is not set. Provide it in the environment or .env file to use --research-designer."
+        )
+
+    client = Perplexity(api_key=api_key)
+    for name in names:
+        research_trendy_designer_prompt(designer_dir, name, client=client)
 
 
 def build_prompt(description: str, prompt_template: str, suffix: str = "") -> str:
@@ -495,6 +619,16 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     configure_logging(args.log_level)
 
     load_env_file(pathlib.Path(args.env_file))
+
+    designer_dir = pathlib.Path(args.designer_dir)
+    output_dir = pathlib.Path(args.output_dir)
+
+    try:
+        run_designer_research(designer_dir, args.research_designer)
+    except DesignerResearchError as exc:
+        print(str(exc), file=sys.stderr)
+        return 1
+
     api_key = os.environ.get("OPENROUTER_API_KEY")
     if not api_key and not args.dry_run:
         print(
@@ -503,8 +637,6 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         )
         return 1
 
-    designer_dir = pathlib.Path(args.designer_dir)
-    output_dir = pathlib.Path(args.output_dir)
     try:
         references = prepare_reference_inputs(args.reference)
     except ReferenceInputError as exc:
