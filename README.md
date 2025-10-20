@@ -7,6 +7,7 @@ personas and generating concept images through the OpenRouter image API.
 
 - Describe the UI you want to explore via a CLI argument.
 - Mix and match designer prompt templates stored as markdown files.
+- Research the latest trendy design directions to inspire and create new personas.
 - Generate concept images for each selected designer using OpenRouter.
 - Preview prompts without generating images via `--dry-run` mode.
 - Supply one or more reference images or URLs to steer the generation results.
