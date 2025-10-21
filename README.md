@@ -139,3 +139,4 @@ Note: Use an image-capable chat model (output modality includes "image"). See th
 
 - `OPENROUTER_API_KEY`: required for non dry-run usage. Loaded from the current
   environment or the `.env` file specified via `--env-file`.
+- `PERPLEXITY_API_KEY`: required when using persona research via the Streamlit UI or the CLI `--research-designer` flag. You can store it in `.env` or supply it directly in the UI sidebar.
