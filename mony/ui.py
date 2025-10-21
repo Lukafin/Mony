@@ -68,11 +68,16 @@ def _display_generated_image(path: pathlib.Path, label: str) -> None:
     if not path.exists():
         st.warning(f"Generated image for {label} could not be found at {path}.")
         return
-    st.image(str(path), caption=f"{label} – {path.name}")
+    st.markdown(f"**{label}**")
+    st.image(str(path))
+    st.caption(path.name)
 
 
 def _research_designer_via_perplexity(
-    designer_dir: pathlib.Path, persona_name: str, api_key: str
+    designer_dir: pathlib.Path,
+    persona_name: str,
+    api_key: str,
+    instructions: str,
 ) -> tuple[pathlib.Path, str]:
     """Research and persist a trendy designer persona using Perplexity."""
 
@@ -92,7 +97,13 @@ def _research_designer_via_perplexity(
             ) from exc
 
     client = Perplexity(api_key=api_key.strip())
-    path = cli.research_trendy_designer_prompt(designer_dir, persona_name, client=client)
+    prompt_instructions = instructions.strip()
+    path = cli.research_trendy_designer_prompt(
+        designer_dir,
+        persona_name,
+        client=client,
+        instructions=prompt_instructions or None,
+    )
     return path, path.read_text().strip()
 
 
@@ -143,8 +154,6 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    available_designers = _load_available_designers(designer_dir)
-
     research_tab, generate_tab = st.tabs(
         ["Research personas", "Generate images"]
     )
@@ -154,6 +163,17 @@ def run() -> None:
         research_name = st.text_input(
             "Persona name to research",
             placeholder="e.g., Neo Brutalist Visionary",
+        )
+        if "research_instructions" not in st.session_state:
+            st.session_state["research_instructions"] = cli.DEFAULT_RESEARCH_INSTRUCTIONS
+        research_instructions = st.text_area(
+            "Research instructions",
+            key="research_instructions",
+            height=160,
+            help=(
+                "Customize the Perplexity request used when generating persona prompts. "
+                "Placeholders {name} and {year} are substituted automatically."
+            ),
         )
         if "_latest_research" not in st.session_state:
             st.session_state["_latest_research"] = None
@@ -165,7 +185,10 @@ def run() -> None:
                 with st.spinner("Researching latest design trends..."):
                     try:
                         path, text = _research_designer_via_perplexity(
-                            designer_dir, research_name.strip(), perplexity_api_key
+                            designer_dir,
+                            research_name.strip(),
+                            perplexity_api_key,
+                            research_instructions or "",
                         )
                     except cli.DesignerResearchError as exc:
                         st.error(str(exc))
@@ -196,6 +219,8 @@ def run() -> None:
                     height=200,
                     disabled=True,
                 )
+
+    available_designers = _load_available_designers(designer_dir)
 
     with generate_tab:
         st.subheader("Project brief")

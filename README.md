@@ -48,7 +48,10 @@ streamlit run mony/ui.py
 ```
 
 The UI loads designer personas from the configured directory, lets you upload or
-link reference imagery, and displays generated outputs inline.
+link reference imagery, and displays generated outputs inline. The research tab
+now includes a text area that lets you customize the Perplexity instructions used
+to generate new personas—`{name}` and `{year}` placeholders are replaced for you,
+so you can tailor the brief toward specific industries or visual goals.
 
 #### Run the Streamlit UI inside a virtual environment
 
@@ -117,6 +120,15 @@ python -m mony "Smart home control hub" modern \
   --size 9:16 \
   --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png
+```
+
+Refresh or create designer personas before generation and override the research
+instructions sent to Perplexity:
+
+```bash
+python -m mony "Fintech budgeting dashboard" modern \
+  --research-designer "Neo Brutalist Visionary" \
+  --research-instructions "Research emerging fintech dashboards in {year} and craft a bold persona named '{name}' with emphasis on brutalist typography and data visualization."
 ```
 
 Generated images are saved under the `generatedDesigns/` directory with timestamps.

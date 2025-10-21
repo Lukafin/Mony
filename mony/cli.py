@@ -38,6 +38,18 @@ if not DEFAULT_DESIGNER_DIR.exists():
     DEFAULT_DESIGNER_DIR = _PACKAGE_DIR.parent / "designers"
 
 
+DEFAULT_RESEARCH_INSTRUCTIONS = (
+    "You are an award-winning UI creative director who researches cutting-edge digital "
+    "product design trends. Using reputable, current sources, summarize the most "
+    "influential UI/UX aesthetics, interaction patterns, and visual motifs gaining "
+    "traction in {year}. Synthesize them into a concise creative brief for a designer "
+    "persona named '{name}'. Focus on color palettes, typography, layout structures, "
+    "motion principles, and signature flourishes that should inspire UI concept art. "
+    "Provide actionable instructions suitable for a text-to-image prompt. Limit the "
+    "response to 4-6 sentences without markdown headings."
+)
+
+
 logger = logging.getLogger("mony.cli")
 
 
@@ -188,6 +200,14 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--research-instructions",
+        default=None,
+        help=(
+            "Custom Perplexity instructions used with --research-designer. "
+            "Placeholders {name} and {year} are replaced automatically."
+        ),
+    )
+    parser.add_argument(
         "--log-level",
         default="INFO",
         type=normalize_log_level,
@@ -257,7 +277,11 @@ def strip_perplexity_think_blocks(text: str) -> str:
 
 
 def research_trendy_designer_prompt(
-    designer_dir: pathlib.Path, name: str, *, client: object
+    designer_dir: pathlib.Path,
+    name: str,
+    *,
+    client: object,
+    instructions: Optional[str] = None,
 ) -> pathlib.Path:
     slug = sanitize_designer_slug(name)
     filename = designer_dir / f"{slug}.md"
@@ -265,16 +289,14 @@ def research_trendy_designer_prompt(
     current_year = dt.datetime.utcnow().year
     logger.info("Researching updated designer persona for %s", slug)
 
+    prompt_template = (instructions or DEFAULT_RESEARCH_INSTRUCTIONS).strip()
     prompt = (
-        "You are an award-winning UI creative director who researches cutting-edge digital "
-        "product design trends. Using reputable, current sources, summarize the most "
-        "influential UI/UX aesthetics, interaction patterns, and visual motifs gaining "
-        f"traction in {current_year}. Synthesize them into a concise creative brief for a "
-        f"designer persona named '{name}'. Focus on color palettes, typography, layout "
-        "structures, motion principles, and signature flourishes that should inspire UI "
-        "concept art. Provide actionable instructions suitable for a text-to-image prompt. "
-        "Limit the response to 4-6 sentences without markdown headings."
-    )
+        prompt_template.replace("{year}", str(current_year)).replace("{name}", name)
+    ).strip()
+    if not prompt:
+        raise DesignerResearchError(
+            "Research instructions are empty after formatting. Provide a non-empty prompt."
+        )
 
     try:
         if hasattr(client, "messages"):
@@ -335,7 +357,11 @@ def research_trendy_designer_prompt(
     return filename
 
 
-def run_designer_research(designer_dir: pathlib.Path, names: Sequence[str]) -> None:
+def run_designer_research(
+    designer_dir: pathlib.Path,
+    names: Sequence[str],
+    instructions: Optional[str] = None,
+) -> None:
     if not names:
         return
     try:
@@ -356,7 +382,9 @@ def run_designer_research(designer_dir: pathlib.Path, names: Sequence[str]) -> N
 
     client = Perplexity(api_key=api_key)
     for name in names:
-        research_trendy_designer_prompt(designer_dir, name, client=client)
+        research_trendy_designer_prompt(
+            designer_dir, name, client=client, instructions=instructions
+        )
 
 
 def build_prompt(description: str, prompt_template: str, suffix: str = "") -> str:
@@ -656,7 +684,9 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
     output_dir = pathlib.Path(args.output_dir)
 
     try:
-        run_designer_research(designer_dir, args.research_designer)
+        run_designer_research(
+            designer_dir, args.research_designer, instructions=args.research_instructions
+        )
     except DesignerResearchError as exc:
         print(str(exc), file=sys.stderr)
         return 1
