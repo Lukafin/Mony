@@ -301,7 +301,7 @@ def research_trendy_designer_prompt(
     try:
         if hasattr(client, "messages"):
             response = client.messages.create(  # type: ignore[attr-defined]
-                model="sonar-reasoning",
+                model="sonar-pro",
                 messages=[
                     {
                         "role": "system",
@@ -318,7 +318,7 @@ def research_trendy_designer_prompt(
             )
         elif hasattr(client, "chat") and hasattr(client.chat, "completions"):
             response = client.chat.completions.create(  # type: ignore[attr-defined]
-                model="sonar-reasoning",
+                model="sonar-pro",
                 messages=[
                     {
                         "role": "system",
