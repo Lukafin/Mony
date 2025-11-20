@@ -20,7 +20,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 
 # OpenRouter chat completions endpoint (supports image generation with modalities)
 API_URL = "https://openrouter.ai/api/v1/chat/completions"
-DEFAULT_MODEL = "google/gemini-2.5-flash-image-preview"
+DEFAULT_MODEL = "google/gemini-3-pro-image-preview"
 DEFAULT_IMAGE_SIZE = "1024x1024"
 LOG_LEVEL_NAMES = {
     "CRITICAL",

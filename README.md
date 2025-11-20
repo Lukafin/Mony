@@ -109,7 +109,7 @@ python -m mony "AI writing assistant workspace" modern \
 
 `--size` accepts `WIDTHxHEIGHT` or `W:H` (e.g., `768x1344` or `9:16`). When supported by the model, this maps to `image_config.aspect_ratio`.
 
-Default model is `google/gemini-2.5-flash-image-preview`. You can override with `--model`.
+Default model is `google/gemini-3-pro-image-preview`. You can override with `--model`.
 
 Provide reference imagery from a local file or URL. Local files are base64-inlined and
 sent as data URLs within the chat message; URLs are passed directly. Repeat `--reference`
