@@ -83,7 +83,7 @@ mony "Cross-platform personal finance dashboard" modern funky conservative
 # Dry-run mode (preview prompts without API calls)
 mony "Meditation mobile onboarding flow" modern funky --dry-run
 
-# Custom size (model defaults to google/gemini-2.5-flash-image-preview)
+# Custom size (model defaults to google/gemini-3-pro-image-preview)
 mony "AI writing assistant workspace" modern brutalist \
   --size 9:16
 
