@@ -185,6 +185,15 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--image",
+        default=None,
+        metavar="PATH_OR_URL",
+        help=(
+            "Optional base image path or URL to include with your description when "
+            "requesting edits. This is sent before any --reference images."
+        ),
+    )
+    parser.add_argument(
         "--env-file",
         default=".env",
         help="Path to a .env file containing OPENROUTER_API_KEY.",
@@ -700,10 +709,13 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         return 1
 
     try:
+        primary_image = prepare_reference_inputs([args.image]) if args.image else []
         references = prepare_reference_inputs(args.reference)
     except ReferenceInputError as exc:
         print(str(exc), file=sys.stderr)
         return 1
+
+    all_references = primary_image + references
 
     results: List[Tuple[str, pathlib.Path]] = []
     # Dry-run preserves sequential prompt printing for readability
@@ -717,10 +729,15 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
             full_prompt = build_prompt(args.description, designer_prompt.prompt, args.prompt_suffix)
             print(f"=== {designer_prompt.name} ===")
             print(full_prompt)
-            if references:
-                print("References:")
-                for ref in references:
-                    print(f"  - {ref.source}")
+            if all_references:
+                if primary_image:
+                    print("Base image:")
+                    for ref in primary_image:
+                        print(f"  - {ref.source}")
+                if references:
+                    print("References:")
+                    for ref in references:
+                        print(f"  - {ref.source}")
             print()
         return 0
 
@@ -746,7 +763,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     model=args.model,
                     size=args.size,
                     prompt_suffix=args.prompt_suffix,
-                    references=references,
+                    references=all_references,
                 ): name
                 for name in args.designers
             }
