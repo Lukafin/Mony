@@ -614,8 +614,11 @@ def generate_image_for_designer(
     size: str,
     prompt_suffix: str,
     references: Sequence[ReferenceInput],
+    prompt_override: Optional[str] = None,
 ) -> Tuple[str, pathlib.Path]:
     designer_prompt = load_designer_prompt(designer_dir, designer_name)
+    if prompt_override is not None:
+        designer_prompt = DesignerPrompt(name=designer_prompt.name, prompt=prompt_override)
     full_prompt = build_prompt(description, designer_prompt.prompt, prompt_suffix)
     # Retry transient failures, e.g., provider returns no images
     max_attempts = 3

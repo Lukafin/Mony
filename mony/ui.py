@@ -18,6 +18,72 @@ if TYPE_CHECKING:
 
 
 RESEARCH_HISTORY_FILENAME = "research_history.json"
+PROMPT_EDIT_PREFIX = "designer_prompt_edit::"
+PERSONA_EDITOR_PREFIX = "persona_editor::"
+
+
+def _persona_state_key(prefix: str, persona_name: str) -> str:
+    """Build a consistent Streamlit session key for persona text areas."""
+
+    return f"{prefix}{persona_name}"
+
+
+def _designer_prompt_file(designer_dir: pathlib.Path, persona_name: str) -> pathlib.Path:
+    """Resolve the markdown file that stores a persona prompt."""
+
+    candidate = designer_dir / f"{persona_name}.md"
+    if candidate.exists():
+        return candidate
+    without_suffix = designer_dir / persona_name
+    if without_suffix.exists():
+        return without_suffix
+    for path in designer_dir.glob("*.md"):
+        if path.stem == persona_name:
+            return path
+    return candidate
+
+
+def _load_persona_text(designer_dir: pathlib.Path, persona_name: str) -> str:
+    """Load the persona prompt text, showing an error if it fails."""
+
+    try:
+        return cli.load_designer_prompt(designer_dir, persona_name).prompt
+    except cli.DesignerPromptError as exc:  # pragma: no cover - runtime feedback
+        st.error(f"Could not load persona '{persona_name}': {exc}")
+        return ""
+
+
+def _set_persona_state(
+    designer_dir: pathlib.Path,
+    persona_name: str,
+    *,
+    prefix: str,
+    value: str,
+) -> str:
+    """Persist the latest persona text in Streamlit session state."""
+
+    key = _persona_state_key(prefix, persona_name)
+    st.session_state[key] = value
+    key_dirs = st.session_state.setdefault("_designer_prompt_key_dirs", {})
+    key_dirs[key] = str(designer_dir)
+    return key
+
+
+def _ensure_persona_state(
+    designer_dir: pathlib.Path,
+    persona_name: str,
+    *,
+    prefix: str,
+) -> str:
+    """Ensure a session state entry exists for the given persona."""
+
+    key = _persona_state_key(prefix, persona_name)
+    key_dirs = st.session_state.setdefault("_designer_prompt_key_dirs", {})
+    current_dir = str(designer_dir)
+    if key not in st.session_state or key_dirs.get(key) != current_dir:
+        value = _load_persona_text(designer_dir, persona_name)
+        _set_persona_state(designer_dir, persona_name, prefix=prefix, value=value)
+    return key
 
 
 def _load_available_designers(designer_dir: pathlib.Path) -> List[str]:
@@ -254,8 +320,8 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    research_tab, history_tab, generate_tab = st.tabs(
-        ["Research personas", "Research history", "Generate images"]
+    research_tab, history_tab, generate_tab, personas_tab = st.tabs(
+        ["Research personas", "Research history", "Generate images", "Personas"]
     )
 
     with research_tab:
@@ -394,12 +460,24 @@ def run() -> None:
                 title = run.get("name", "Unnamed persona")
                 with st.expander(f"{title} – {timestamp}"):
                     st.markdown(f"**Stored at:** `{run.get('path', 'unknown')}`")
-                    prompt_preview = run.get("prompt_preview", "")
-                    if prompt_preview:
+                    persona_text = ""
+                    path_value = run.get("path")
+                    if isinstance(path_value, str) and path_value.strip():
+                        persona_path = pathlib.Path(path_value)
+                        if persona_path.exists():
+                            try:
+                                persona_text = persona_path.read_text().strip()
+                            except OSError as exc:  # pragma: no cover - user environment dependent
+                                st.error(f"Failed to read persona file: {exc}")
+                        else:
+                            st.warning("Persona file no longer exists on disk.")
+                    if not persona_text:
+                        persona_text = run.get("prompt_preview", "")
+                    if persona_text:
                         st.text_area(
-                            "Prompt preview",
-                            value=prompt_preview,
-                            height=140,
+                            "Persona prompt",
+                            value=persona_text,
+                            height=160,
                             disabled=True,
                         )
         else:
@@ -440,6 +518,29 @@ def run() -> None:
                 ),
             )
 
+        selected_prompt_overrides: Dict[str, str] = {}
+        if selected_designers:
+            st.caption(
+                "Expand a persona below to preview or tweak its prompt for this generation."
+            )
+            for designer_name in selected_designers:
+                prompt_state_key = _ensure_persona_state(
+                    designer_dir, designer_name, prefix=PROMPT_EDIT_PREFIX
+                )
+                with st.expander(f"{designer_name} prompt", expanded=False):
+                    st.text_area(
+                        "Persona prompt",
+                        key=prompt_state_key,
+                        height=180,
+                        label_visibility="collapsed",
+                        help=(
+                            "Changes here only affect the current run. Use the Personas tab to save edits."
+                        ),
+                    )
+                selected_prompt_overrides[designer_name] = st.session_state.get(
+                    prompt_state_key, ""
+                )
+
         st.subheader("Reference images")
         uploaded_refs = st.file_uploader(
             "Upload reference images",
@@ -479,6 +580,9 @@ def run() -> None:
                     results = []
                     with st.spinner("Generating images..."):
                         for designer_name in selected_designers:
+                            prompt_override = selected_prompt_overrides.get(
+                                designer_name
+                            )
                             try:
                                 _, image_path = cli.generate_image_for_designer(
                                     api_key=api_key.strip(),
@@ -490,6 +594,7 @@ def run() -> None:
                                     size=size.strip(),
                                     prompt_suffix=prompt_suffix,
                                     references=references,
+                                    prompt_override=prompt_override,
                                 )
                                 results.append((designer_name, image_path))
                             except Exception as exc:  # pragma: no cover - runtime feedback
@@ -523,6 +628,87 @@ def run() -> None:
                         st.info(
                             "No images were generated. Ensure you selected a designer or provided a custom persona."
                         )
+
+    with personas_tab:
+        st.subheader("Persona library")
+        st.write("Inspect and edit the saved persona prompt files in your designer directory.")
+        if not available_designers:
+            st.info(
+                "No personas available. Research or add personas first, then return to edit them."
+            )
+        else:
+            persona_to_edit = st.selectbox(
+                "Choose a persona",
+                available_designers,
+                key="persona_editor_selector",
+                help="Select which persona markdown file to edit.",
+            )
+            if persona_to_edit:
+                editor_key = _ensure_persona_state(
+                    designer_dir, persona_to_edit, prefix=PERSONA_EDITOR_PREFIX
+                )
+                persona_file = _designer_prompt_file(designer_dir, persona_to_edit)
+                st.caption(f"File: `{persona_file}`")
+                st.text_area(
+                    "Persona prompt text",
+                    key=editor_key,
+                    height=240,
+                    label_visibility="collapsed",
+                )
+                save_col, reload_col = st.columns(2)
+                if save_col.button(
+                    "Save persona",
+                    key=f"save_persona_{persona_to_edit}",
+                    use_container_width=True,
+                ):
+                    updated_text = st.session_state.get(editor_key, "")
+                    try:
+                        cli.ensure_output_dir(designer_dir)
+                        content = updated_text
+                        if content and not content.endswith("\n"):
+                            content += "\n"
+                        persona_file.write_text(content)
+                    except OSError as exc:  # pragma: no cover - user environment dependent
+                        st.error(f"Failed to save persona: {exc}")
+                    else:
+                        _set_persona_state(
+                            designer_dir,
+                            persona_to_edit,
+                            prefix=PERSONA_EDITOR_PREFIX,
+                            value=updated_text,
+                        )
+                        prompt_key = _persona_state_key(
+                            PROMPT_EDIT_PREFIX, persona_to_edit
+                        )
+                        if prompt_key in st.session_state:
+                            _set_persona_state(
+                                designer_dir,
+                                persona_to_edit,
+                                prefix=PROMPT_EDIT_PREFIX,
+                                value=updated_text,
+                            )
+                        st.success(f"Saved updates to {persona_file.name}.")
+                if reload_col.button(
+                    "Reload from file",
+                    key=f"reload_persona_{persona_to_edit}",
+                    use_container_width=True,
+                ):
+                    refreshed_text = _load_persona_text(designer_dir, persona_to_edit)
+                    _set_persona_state(
+                        designer_dir,
+                        persona_to_edit,
+                        prefix=PERSONA_EDITOR_PREFIX,
+                        value=refreshed_text,
+                    )
+                    prompt_key = _persona_state_key(PROMPT_EDIT_PREFIX, persona_to_edit)
+                    if prompt_key in st.session_state:
+                        _set_persona_state(
+                            designer_dir,
+                            persona_to_edit,
+                            prefix=PROMPT_EDIT_PREFIX,
+                            value=refreshed_text,
+                        )
+                    st.info("Persona reloaded from disk.")
 
 
 if __name__ == "__main__":
