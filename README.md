@@ -11,6 +11,7 @@ personas and generating concept images through the OpenRouter image API.
 - Generate concept images for each selected designer using OpenRouter.
 - Preview prompts without generating images via `--dry-run` mode.
 - Supply one or more reference images or URLs to steer the generation results.
+- Start from an existing image and describe how you want to change it.
 
 ## Installation
 
@@ -120,6 +121,16 @@ python -m mony "Smart home control hub" modern \
   --size 9:16 \
   --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png
+```
+
+Pass a base image to request edits while still including optional reference material. The
+`--image` payload is sent before any `--reference` entries so models treat it as the
+primary input:
+
+```bash
+python -m mony "Rework this layout into a minimalist dashboard" modern \
+  --image ./existing-layout.png \
+  --reference https://example.com/color-inspiration.png
 ```
 
 Refresh or create designer personas before generation and override the research
