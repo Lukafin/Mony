@@ -1,0 +1,14 @@
+{
+  "runs": [
+    {
+      "name": "December 2025",
+      "path": "/Users/lfingar/Documents/Playground/Mony/mony/designers/december-2025.md",
+      "prompt_preview": "In 2025, the UI landscape is dominated by **high-contrast color systems pairing deep darks with neon accents**\u2014think dark blues with electric orange or vibrant neon tones on charcoal backgrounds\u2014creating visual tension that cuts through digital noise while maintaining readability",
+      "timestamp": "2025-12-02T14:11:26.036214Z"
+    }
+  ],
+  "settings": {
+    "monthly_enabled": false,
+    "monthly_day": 1
+  }
+}
