@@ -3,9 +3,11 @@
 from __future__ import annotations
 
 import base64
+import datetime as dt
+import json
 import os
 import pathlib
-from typing import TYPE_CHECKING, List, Sequence
+from typing import TYPE_CHECKING, Dict, List, Sequence
 
 import streamlit as st
 
@@ -13,6 +15,9 @@ from mony import cli
 
 if TYPE_CHECKING:
     from streamlit.runtime.uploaded_file_manager import UploadedFile
+
+
+RESEARCH_HISTORY_FILENAME = "research_history.json"
 
 
 def _load_available_designers(designer_dir: pathlib.Path) -> List[str]:
@@ -107,6 +112,101 @@ def _research_designer_via_perplexity(
     return path, path.read_text().strip()
 
 
+def _history_file(designer_dir: pathlib.Path) -> pathlib.Path:
+    """Return the path to the research history file for the given designer directory."""
+
+    return designer_dir / RESEARCH_HISTORY_FILENAME
+
+
+def _load_research_history(designer_dir: pathlib.Path) -> Dict[str, object]:
+    """Load persisted research history, falling back to sensible defaults."""
+
+    history_file = _history_file(designer_dir)
+    if not history_file.exists():
+        return {"runs": [], "settings": {}}
+
+    try:
+        data = json.loads(history_file.read_text())
+    except Exception:
+        return {"runs": [], "settings": {}}
+
+    runs = data.get("runs") if isinstance(data, dict) else []
+    settings = data.get("settings") if isinstance(data, dict) else {}
+    return {
+        "runs": runs if isinstance(runs, list) else [],
+        "settings": settings if isinstance(settings, dict) else {},
+    }
+
+
+def _save_research_history(designer_dir: pathlib.Path, history: Dict[str, object]) -> None:
+    """Persist research history to the designer directory."""
+
+    cli.ensure_output_dir(designer_dir)
+    history_file = _history_file(designer_dir)
+    history_file.write_text(json.dumps(history, indent=2))
+
+
+def _record_research_run(
+    designer_dir: pathlib.Path,
+    history: Dict[str, object],
+    *,
+    persona_name: str,
+    path: pathlib.Path,
+    prompt: str,
+) -> None:
+    """Add a research run entry and persist the updated history."""
+
+    runs = history.setdefault("runs", [])
+    if not isinstance(runs, list):
+        runs = []
+        history["runs"] = runs
+
+    runs.insert(
+        0,
+        {
+            "name": persona_name,
+            "path": str(path),
+            "prompt_preview": prompt.strip()[:280],
+            "timestamp": dt.datetime.utcnow().isoformat() + "Z",
+        },
+    )
+    history["runs"] = runs[:50]
+    _save_research_history(designer_dir, history)
+
+
+def _calculate_next_monthly_run(history: Dict[str, object]) -> dt.date | None:
+    """Return the next due date for monthly research reminders, if enabled."""
+
+    settings = history.get("settings", {}) if isinstance(history, dict) else {}
+    if not isinstance(settings, dict) or not settings.get("monthly_enabled"):
+        return None
+
+    day = int(settings.get("monthly_day", 1))
+    day = max(1, min(day, 28))
+
+    runs = history.get("runs", []) if isinstance(history, dict) else []
+    last_run_date = None
+    if runs and isinstance(runs, list):
+        timestamp = runs[0].get("timestamp") if isinstance(runs[0], dict) else None
+        if isinstance(timestamp, str):
+            try:
+                parsed = dt.datetime.fromisoformat(timestamp.replace("Z", ""))
+                last_run_date = parsed.date()
+            except ValueError:
+                last_run_date = None
+
+    today = dt.date.today()
+    base = last_run_date or today
+    if base.day >= day:
+        month = base.month + 1
+        year = base.year + (month - 1) // 12
+        month = ((month - 1) % 12) + 1
+    else:
+        month = base.month
+        year = base.year
+    return dt.date(year, month, day)
+
+
 def run() -> None:
     """Execute the Streamlit UI."""
 
@@ -154,8 +254,8 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    research_tab, generate_tab = st.tabs(
-        ["Research personas", "Generate images"]
+    research_tab, history_tab, generate_tab = st.tabs(
+        ["Research personas", "Research history", "Generate images"]
     )
 
     with research_tab:
@@ -164,8 +264,25 @@ def run() -> None:
             "Persona name to research",
             placeholder="e.g., Neo Brutalist Visionary",
         )
+        if "_research_history" not in st.session_state or st.session_state.get(
+            "_history_dir"
+        ) != str(designer_dir):
+            st.session_state["_research_history"] = _load_research_history(
+                designer_dir
+            )
+            st.session_state["_history_dir"] = str(designer_dir)
+
+        research_history = st.session_state.get("_research_history", {})
+        history_settings = research_history.get("settings", {})
+        if not isinstance(history_settings, dict):
+            history_settings = {}
+            research_history["settings"] = history_settings
+
         if "research_instructions" not in st.session_state:
-            st.session_state["research_instructions"] = cli.DEFAULT_RESEARCH_INSTRUCTIONS
+            saved_prompt = history_settings.get("saved_prompt")
+            st.session_state["research_instructions"] = (
+                saved_prompt or cli.DEFAULT_RESEARCH_INSTRUCTIONS
+            )
         research_instructions = st.text_area(
             "Research instructions",
             key="research_instructions",
@@ -175,6 +292,36 @@ def run() -> None:
                 "Placeholders {name} and {year} are substituted automatically."
             ),
         )
+        monthly_enabled = st.toggle(
+            "Enable monthly persona research reminders",
+            value=bool(history_settings.get("monthly_enabled", False)),
+            help=(
+                "Track when you last refreshed personas and surface the next suggested run."
+            ),
+        )
+        preferred_day = st.number_input(
+            "Preferred day of month for research",
+            min_value=1,
+            max_value=28,
+            step=1,
+            value=int(history_settings.get("monthly_day", 1)),
+            help="Choose when the monthly research task should recur.",
+        )
+        if (
+            monthly_enabled != history_settings.get("monthly_enabled")
+            or preferred_day != history_settings.get("monthly_day")
+        ):
+            history_settings["monthly_enabled"] = monthly_enabled
+            history_settings["monthly_day"] = int(preferred_day)
+            _save_research_history(designer_dir, research_history)
+
+        next_due = _calculate_next_monthly_run(research_history)
+        if monthly_enabled and next_due:
+            st.info(
+                f"Monthly research enabled. Next suggested run: {next_due.strftime('%Y-%m-%d')}"
+            )
+        elif monthly_enabled:
+            st.info("Monthly research enabled. Run a research task to start the schedule.")
         if "_latest_research" not in st.session_state:
             st.session_state["_latest_research"] = None
 
@@ -200,9 +347,22 @@ def run() -> None:
                             "path": str(path),
                             "text": text,
                         }
+                        _record_research_run(
+                            designer_dir,
+                            research_history,
+                            persona_name=research_name.strip(),
+                            path=path,
+                            prompt=text,
+                        )
                         st.success(
                             f"Saved updated persona prompt to {path.name}. It is now available in the selector on the Generate tab."
                         )
+
+        if st.button("Save prompt as new default", type="secondary"):
+            history_settings["saved_prompt"] = research_instructions
+            st.session_state["research_instructions"] = research_instructions
+            _save_research_history(designer_dir, research_history)
+            st.success("Updated default research prompt saved.")
 
         latest_research = st.session_state.get("_latest_research")
         if latest_research:
@@ -221,6 +381,35 @@ def run() -> None:
                 )
 
     available_designers = _load_available_designers(designer_dir)
+
+    with history_tab:
+        st.subheader("Recent research runs")
+        research_history = st.session_state.get("_research_history", {})
+        runs = research_history.get("runs", []) if isinstance(research_history, dict) else []
+        if runs:
+            for run in runs:
+                if not isinstance(run, dict):
+                    continue
+                timestamp = run.get("timestamp", "Unknown time")
+                title = run.get("name", "Unnamed persona")
+                with st.expander(f"{title} – {timestamp}"):
+                    st.markdown(f"**Stored at:** `{run.get('path', 'unknown')}`")
+                    prompt_preview = run.get("prompt_preview", "")
+                    if prompt_preview:
+                        st.text_area(
+                            "Prompt preview",
+                            value=prompt_preview,
+                            height=140,
+                            disabled=True,
+                        )
+        else:
+            st.info("No research runs recorded yet. Run a persona research task to populate history.")
+
+        st.subheader("Available designer personas")
+        if available_designers:
+            st.write(", ".join(available_designers))
+        else:
+            st.write("No personas found in the configured designer directory.")
 
     with generate_tab:
         st.subheader("Project brief")
