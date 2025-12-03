@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import hashlib
 from typing import TYPE_CHECKING, Dict, List, Sequence
 
 import streamlit as st
@@ -20,6 +21,8 @@ if TYPE_CHECKING:
 RESEARCH_HISTORY_FILENAME = "research_history.json"
 PROMPT_EDIT_PREFIX = "designer_prompt_edit::"
 PERSONA_EDITOR_PREFIX = "persona_editor::"
+DEFAULT_CREDENTIALS_FILENAME = "ui_credentials.json"
+AUTH_STATE_KEY = "_mony_authenticated"
 
 
 def _persona_state_key(prefix: str, persona_name: str) -> str:
@@ -67,6 +70,85 @@ def _set_persona_state(
     key_dirs = st.session_state.setdefault("_designer_prompt_key_dirs", {})
     key_dirs[key] = str(designer_dir)
     return key
+
+
+def _credentials_file_path() -> pathlib.Path:
+    """Return the absolute path where UI credentials are stored."""
+
+    override = os.environ.get("MONY_CREDENTIALS_PATH")
+    base = pathlib.Path(override).expanduser() if override else pathlib.Path(DEFAULT_CREDENTIALS_FILENAME)
+    return base.expanduser().resolve()
+
+
+def _load_credentials(path: pathlib.Path) -> Dict[str, str]:
+    """Load persisted username/password hash if present."""
+
+    if not path.exists():
+        return {}
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return {}
+    username = data.get("username") if isinstance(data, dict) else None
+    password_hash = data.get("password_hash") if isinstance(data, dict) else None
+    if isinstance(username, str) and isinstance(password_hash, str):
+        return {"username": username, "password_hash": password_hash}
+    return {}
+
+
+def _hash_secret(secret: str) -> str:
+    """Hash the provided secret for storage."""
+
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _save_credentials(path: pathlib.Path, username: str, password_hash: str) -> None:
+    """Persist credentials to disk."""
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    payload = {"username": username, "password_hash": password_hash}
+    path.write_text(json.dumps(payload, indent=2))
+
+
+def _clear_credentials(path: pathlib.Path) -> None:
+    """Remove stored credentials if present."""
+
+    try:
+        path.unlink()
+    except FileNotFoundError:
+        return
+
+
+def _require_authentication(credentials: Dict[str, str]) -> None:
+    """Prompt for credentials when login protection is enabled."""
+
+    if not credentials:
+        st.session_state[AUTH_STATE_KEY] = True
+        return
+
+    if st.session_state.get(AUTH_STATE_KEY):
+        return
+
+    st.info("Sign in to access the Mony UI.")
+    with st.form("mony_login_form"):
+        username = st.text_input("Username")
+        password = st.text_input("Password", type="password")
+        submitted = st.form_submit_button("Sign in")
+
+    if submitted:
+        if (
+            username == credentials.get("username")
+            and _hash_secret(password) == credentials.get("password_hash")
+        ):
+            st.session_state[AUTH_STATE_KEY] = True
+            st.success("Signed in successfully.")
+            if hasattr(st, "rerun"):
+                st.rerun()
+            elif hasattr(st, "experimental_rerun"):
+                st.experimental_rerun()  # pragma: no cover - legacy Streamlit fallback
+        else:
+            st.error("Invalid username or password.")
+    st.stop()
 
 
 def _ensure_persona_state(
@@ -281,11 +363,16 @@ def run() -> None:
     default_env = pathlib.Path(".env")
     _ensure_env_loaded(default_env)
 
+    credentials_path = _credentials_file_path()
+    stored_credentials = _load_credentials(credentials_path)
+
     st.title("Mony – UI Concept Generator")
     st.write(
         "Generate UI concept art by combining a project description with "
         "designer personas and optional reference images."
     )
+
+    _require_authentication(stored_credentials)
 
     with st.sidebar:
         st.header("Configuration")
@@ -320,8 +407,14 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    research_tab, history_tab, generate_tab, personas_tab = st.tabs(
-        ["Research personas", "Research history", "Generate images", "Personas"]
+    research_tab, history_tab, generate_tab, personas_tab, settings_tab = st.tabs(
+        [
+            "Research personas",
+            "Research history",
+            "Generate images",
+            "Personas",
+            "Settings",
+        ]
     )
 
     with research_tab:
@@ -709,6 +802,67 @@ def run() -> None:
                             value=refreshed_text,
                         )
                     st.info("Persona reloaded from disk.")
+
+    with settings_tab:
+        st.subheader("Security settings")
+        st.write(
+            "Set a username and password to require sign-in before anyone uses the UI."
+        )
+        st.caption(f"Credentials file: `{credentials_path}`")
+        current_credentials = _load_credentials(credentials_path)
+        if current_credentials:
+            st.success(
+                f"Login required for user '{current_credentials.get('username', 'unknown')}'."
+            )
+        else:
+            st.info("No credentials saved. Anyone with access to this page can use the UI.")
+
+        settings_username = st.text_input(
+            "Username",
+            value=current_credentials.get("username", ""),
+        )
+        settings_password = st.text_input("Password", type="password")
+        settings_confirm = st.text_input("Confirm password", type="password")
+
+        if st.button("Save credentials", use_container_width=True):
+            username_value = settings_username.strip()
+            if not username_value:
+                st.error("Enter a username before saving credentials.")
+            elif not settings_password:
+                st.error("Enter a password before saving credentials.")
+            elif settings_password != settings_confirm:
+                st.error("Passwords do not match. Re-enter to confirm.")
+            else:
+                hashed = _hash_secret(settings_password)
+                try:
+                    _save_credentials(credentials_path, username_value, hashed)
+                except OSError as exc:  # pragma: no cover - user environment dependent
+                    st.error(f"Failed to save credentials: {exc}")
+                else:
+                    st.success(
+                        "Credentials saved. On the next app reload you will be prompted to sign in."
+                    )
+
+        remove_col, logout_col = st.columns(2)
+        remove_disabled = not credentials_path.exists()
+        if remove_col.button(
+            "Remove credentials",
+            use_container_width=True,
+            disabled=remove_disabled,
+        ):
+            try:
+                _clear_credentials(credentials_path)
+            except OSError as exc:  # pragma: no cover - user environment dependent
+                st.error(f"Failed to remove credentials: {exc}")
+            else:
+                st.session_state.pop(AUTH_STATE_KEY, None)
+                st.success("Login requirement removed. Reload the page to reflect the change.")
+
+        if st.session_state.get(AUTH_STATE_KEY) and logout_col.button(
+            "Log out", use_container_width=True
+        ):
+            st.session_state.pop(AUTH_STATE_KEY, None)
+            st.experimental_rerun()
 
 
 if __name__ == "__main__":

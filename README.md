@@ -56,7 +56,8 @@ markdown files so you can edit and save persona prompts on disk without leaving
 the app. The research tab also includes a text area that lets you customize the
 Perplexity instructions used to generate new personas—`{name}` and `{year}`
 placeholders are replaced for you, so you can tailor the brief toward specific
-industries or visual goals.
+industries or visual goals. Use the Settings tab to set a username/password so the
+app requires a quick login whenever it launches.
 
 #### Run the Streamlit UI inside a virtual environment
 
