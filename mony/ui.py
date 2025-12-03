@@ -8,6 +8,8 @@ import json
 import os
 import pathlib
 import hashlib
+import hmac
+import time
 from typing import TYPE_CHECKING, Dict, List, Sequence
 
 import streamlit as st
@@ -23,6 +25,12 @@ PROMPT_EDIT_PREFIX = "designer_prompt_edit::"
 PERSONA_EDITOR_PREFIX = "persona_editor::"
 DEFAULT_CREDENTIALS_FILENAME = "ui_credentials.json"
 AUTH_STATE_KEY = "_mony_authenticated"
+PASSWORD_SALT_BYTES = 16
+PASSWORD_HASH_ITERATIONS = 120_000
+LOGIN_FAILURE_KEY = "_mony_login_failures"
+LOGIN_LOCK_KEY = "_mony_login_lock_until"
+LOGIN_MAX_ATTEMPTS = 5
+LOGIN_LOCKOUT_SECONDS = 30
 
 
 def _persona_state_key(prefix: str, persona_name: str) -> str:
@@ -91,22 +99,47 @@ def _load_credentials(path: pathlib.Path) -> Dict[str, str]:
         return {}
     username = data.get("username") if isinstance(data, dict) else None
     password_hash = data.get("password_hash") if isinstance(data, dict) else None
+    salt = data.get("salt") if isinstance(data, dict) else None
     if isinstance(username, str) and isinstance(password_hash, str):
-        return {"username": username, "password_hash": password_hash}
+        result = {"username": username, "password_hash": password_hash}
+        if isinstance(salt, str):
+            result["salt"] = salt
+        return result
     return {}
 
 
-def _hash_secret(secret: str) -> str:
-    """Hash the provided secret for storage."""
+def _generate_salt() -> str:
+    """Return a random salt encoded for storage."""
 
-    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+    salt_bytes = os.urandom(PASSWORD_SALT_BYTES)
+    return base64.b64encode(salt_bytes).decode("ascii")
 
 
-def _save_credentials(path: pathlib.Path, username: str, password_hash: str) -> None:
-    """Persist credentials to disk."""
+def _hash_secret(secret: str, salt: str) -> str:
+    """Hash the provided secret using PBKDF2 for storage."""
 
+    salt_bytes = base64.b64decode(salt.encode("ascii"))
+    derived = hashlib.pbkdf2_hmac(
+        "sha256",
+        secret.encode("utf-8"),
+        salt_bytes,
+        PASSWORD_HASH_ITERATIONS,
+    )
+    return base64.b64encode(derived).decode("ascii")
+
+
+def _save_credentials(path: pathlib.Path, username: str, password: str) -> None:
+    """Persist credentials to disk by hashing the provided password."""
+
+    salt = _generate_salt()
+    password_hash = _hash_secret(password, salt)
+    payload = {
+        "username": username,
+        "password_hash": password_hash,
+        "salt": salt,
+        "iterations": PASSWORD_HASH_ITERATIONS,
+    }
     path.parent.mkdir(parents=True, exist_ok=True)
-    payload = {"username": username, "password_hash": password_hash}
     path.write_text(json.dumps(payload, indent=2))
 
 
@@ -119,7 +152,53 @@ def _clear_credentials(path: pathlib.Path) -> None:
         return
 
 
-def _require_authentication(credentials: Dict[str, str]) -> None:
+def _legacy_hash(secret: str) -> str:
+    """Return legacy SHA-256 hash used before salts were introduced."""
+
+    return hashlib.sha256(secret.encode("utf-8")).hexdigest()
+
+
+def _ensure_lockout_reset() -> None:
+    """Clear login lock if the timeout has expired."""
+
+    lock_until = st.session_state.get(LOGIN_LOCK_KEY)
+    if not lock_until:
+        return
+    if time.time() >= lock_until:
+        st.session_state.pop(LOGIN_LOCK_KEY, None)
+        st.session_state.pop(LOGIN_FAILURE_KEY, None)
+
+
+def _record_failed_login() -> None:
+    """Increment failure counter and lock out if necessary."""
+
+    failures = int(st.session_state.get(LOGIN_FAILURE_KEY, 0)) + 1
+    st.session_state[LOGIN_FAILURE_KEY] = failures
+    if failures >= LOGIN_MAX_ATTEMPTS:
+        st.session_state[LOGIN_LOCK_KEY] = time.time() + LOGIN_LOCKOUT_SECONDS
+
+
+def _credentials_valid(
+    credentials: Dict[str, str],
+    username: str,
+    password: str,
+) -> tuple[bool, bool]:
+    """Check credentials and indicate whether legacy hashing was used."""
+
+    if username != credentials.get("username"):
+        return False, False
+    stored_hash = credentials.get("password_hash")
+    if not isinstance(stored_hash, str):
+        return False, False
+    salt = credentials.get("salt")
+    if isinstance(salt, str) and salt:
+        candidate = _hash_secret(password, salt)
+        return hmac.compare_digest(candidate, stored_hash), False
+    candidate = _legacy_hash(password)
+    return hmac.compare_digest(candidate, stored_hash), True
+
+
+def _require_authentication(credentials: Dict[str, str], credentials_path: pathlib.Path) -> None:
     """Prompt for credentials when login protection is enabled."""
 
     if not credentials:
@@ -129,6 +208,15 @@ def _require_authentication(credentials: Dict[str, str]) -> None:
     if st.session_state.get(AUTH_STATE_KEY):
         return
 
+    _ensure_lockout_reset()
+    lock_until = st.session_state.get(LOGIN_LOCK_KEY)
+    if lock_until:
+        remaining = int(max(0, lock_until - time.time()))
+        st.error(
+            f"Too many failed login attempts. Try again in {remaining} seconds."
+        )
+        st.stop()
+
     st.info("Sign in to access the Mony UI.")
     with st.form("mony_login_form"):
         username = st.text_input("Username")
@@ -136,18 +224,21 @@ def _require_authentication(credentials: Dict[str, str]) -> None:
         submitted = st.form_submit_button("Sign in")
 
     if submitted:
-        if (
-            username == credentials.get("username")
-            and _hash_secret(password) == credentials.get("password_hash")
-        ):
+        valid, legacy = _credentials_valid(credentials, username, password)
+        if valid:
             st.session_state[AUTH_STATE_KEY] = True
+            st.session_state.pop(LOGIN_FAILURE_KEY, None)
+            st.session_state.pop(LOGIN_LOCK_KEY, None)
             st.success("Signed in successfully.")
+            if legacy:
+                _save_credentials(credentials_path, username, password)
             if hasattr(st, "rerun"):
                 st.rerun()
             elif hasattr(st, "experimental_rerun"):
                 st.experimental_rerun()  # pragma: no cover - legacy Streamlit fallback
         else:
             st.error("Invalid username or password.")
+            _record_failed_login()
     st.stop()
 
 
@@ -372,7 +463,7 @@ def run() -> None:
         "designer personas and optional reference images."
     )
 
-    _require_authentication(stored_credentials)
+    _require_authentication(stored_credentials, credentials_path)
 
     with st.sidebar:
         st.header("Configuration")
@@ -811,9 +902,14 @@ def run() -> None:
         st.caption(f"Credentials file: `{credentials_path}`")
         current_credentials = _load_credentials(credentials_path)
         if current_credentials:
-            st.success(
-                f"Login required for user '{current_credentials.get('username', 'unknown')}'."
-            )
+            if "salt" in current_credentials:
+                st.success(
+                    f"Login required for user '{current_credentials.get('username', 'unknown')}'."
+                )
+            else:
+                st.warning(
+                    "Legacy credentials detected. Save new credentials to upgrade security."
+                )
         else:
             st.info("No credentials saved. Anyone with access to this page can use the UI.")
 
@@ -833,9 +929,8 @@ def run() -> None:
             elif settings_password != settings_confirm:
                 st.error("Passwords do not match. Re-enter to confirm.")
             else:
-                hashed = _hash_secret(settings_password)
                 try:
-                    _save_credentials(credentials_path, username_value, hashed)
+                    _save_credentials(credentials_path, username_value, settings_password)
                 except OSError as exc:  # pragma: no cover - user environment dependent
                     st.error(f"Failed to save credentials: {exc}")
                 else:
