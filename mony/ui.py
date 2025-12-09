@@ -7,6 +7,7 @@ import datetime as dt
 import json
 import os
 import pathlib
+import uuid
 from typing import TYPE_CHECKING, Dict, List, Sequence
 
 import streamlit as st
@@ -20,6 +21,7 @@ if TYPE_CHECKING:
 RESEARCH_HISTORY_FILENAME = "research_history.json"
 PROMPT_EDIT_PREFIX = "designer_prompt_edit::"
 PERSONA_EDITOR_PREFIX = "persona_editor::"
+VOTING_PROMPT_PREFIX = "voting_prompt_edit::"
 
 
 def _persona_state_key(prefix: str, persona_name: str) -> str:
@@ -131,6 +133,44 @@ def _ensure_env_loaded(env_path: pathlib.Path) -> None:
         return
     cli.load_env_file(env_path)
     st.session_state["_MONY_ENV_LOADED"] = True
+
+
+def _voting_session_dir(output_dir: pathlib.Path) -> pathlib.Path:
+    """Return the directory where voting sessions are stored."""
+
+    return output_dir / "voting_sessions"
+
+
+def _voting_session_file(output_dir: pathlib.Path, session_id: str) -> pathlib.Path:
+    """Return the path to a voting session JSON file."""
+
+    return _voting_session_dir(output_dir) / f"{session_id}.json"
+
+
+def _load_voting_session(
+    output_dir: pathlib.Path, session_id: str
+) -> Dict[str, object] | None:
+    """Load a persisted voting session from disk if available."""
+
+    path = _voting_session_file(output_dir, session_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_voting_session(output_dir: pathlib.Path, data: Dict[str, object]) -> None:
+    """Persist the voting session JSON to disk."""
+
+    sessions_dir = _voting_session_dir(output_dir)
+    cli.ensure_output_dir(sessions_dir)
+    session_id = data.get("id") or uuid.uuid4().hex
+    data["id"] = session_id
+    path = _voting_session_file(output_dir, session_id)
+    path.write_text(json.dumps(data, indent=2))
 
 
 def _display_generated_image(path: pathlib.Path, label: str) -> None:
@@ -320,8 +360,17 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    research_tab, history_tab, generate_tab, personas_tab = st.tabs(
-        ["Research personas", "Research history", "Generate images", "Personas"]
+    query_params = st.experimental_get_query_params()
+    session_param = query_params.get("session", [None])[0]
+
+    research_tab, history_tab, generate_tab, voting_tab, personas_tab = st.tabs(
+        [
+            "Research personas",
+            "Research history",
+            "Generate images",
+            "Voting",
+            "Personas",
+        ]
     )
 
     with research_tab:
@@ -628,6 +677,166 @@ def run() -> None:
                         st.info(
                             "No images were generated. Ensure you selected a designer or provided a custom persona."
                         )
+
+    with voting_tab:
+        st.subheader("Persona variations voting")
+        st.write(
+            "Create small prompt variations for multiple personas, generate images, "
+            "and collect quick votes from collaborators."
+        )
+
+        voting_description = st.text_area(
+            "Project brief for this voting round",
+            height=120,
+            key="voting_description",
+        )
+
+        selected_voting_personas = st.multiselect(
+            "Choose personas to compare (up to 3)",
+            available_designers,
+            max_selections=3,
+            key="voting_persona_selector",
+        )
+
+        if selected_voting_personas:
+            st.markdown("#### Tweak prompts for each variation")
+            for persona_name in selected_voting_personas:
+                editor_key = _ensure_persona_state(
+                    designer_dir, persona_name, prefix=VOTING_PROMPT_PREFIX
+                )
+                st.text_area(
+                    f"Prompt for {persona_name}",
+                    key=editor_key,
+                    height=140,
+                )
+        else:
+            st.info("Select personas to prepare voting variations.")
+
+        create_col, stop_col = st.columns(2)
+        generated_session_id = st.session_state.get("_active_voting_session")
+
+        if create_col.button(
+            "Create variations and start voting", type="primary", use_container_width=True
+        ):
+            if not selected_voting_personas:
+                st.error("Select at least one persona to create variations.")
+            elif not voting_description.strip():
+                st.error("Provide a project brief before generating variations.")
+            else:
+                results: List[Dict[str, object]] = []
+                votes: Dict[str, int] = {}
+                with st.spinner("Generating persona variations..."):
+                    for persona_name in selected_voting_personas:
+                        prompt_key = _persona_state_key(
+                            VOTING_PROMPT_PREFIX, persona_name
+                        )
+                        prompt_text = st.session_state.get(prompt_key, "")
+                        try:
+                            full_prompt = cli.build_prompt(
+                                voting_description, prompt_text, prompt_suffix
+                            )
+                            image_bytes = cli.request_image(
+                                api_key.strip(),
+                                full_prompt,
+                                model.strip(),
+                                size.strip(),
+                                references=[],
+                            )
+                            image_path = cli.save_image(
+                                image_bytes, output_dir, f"voting-{persona_name}"
+                            )
+                        except Exception as exc:  # pragma: no cover - runtime feedback
+                            st.error(f"Failed to generate for {persona_name}: {exc}")
+                            continue
+
+                        votes[persona_name] = 0
+                        results.append(
+                            {
+                                "persona": persona_name,
+                                "prompt": prompt_text,
+                                "image": str(image_path),
+                            }
+                        )
+
+                if results:
+                    session_data: Dict[str, object] = {
+                        "id": uuid.uuid4().hex,
+                        "status": "open",
+                        "created": dt.datetime.utcnow().isoformat() + "Z",
+                        "description": voting_description,
+                        "variants": results,
+                        "votes": votes,
+                    }
+                    _save_voting_session(output_dir, session_data)
+                    generated_session_id = session_data["id"]
+                    st.session_state["_active_voting_session"] = generated_session_id
+                    st.experimental_set_query_params(session=generated_session_id)
+                    st.success("Voting session created. Share the link below.")
+                    share_link = f"?session={generated_session_id}"
+                    st.code(share_link, language="text")
+                else:
+                    st.info("No images were generated for this voting round.")
+
+        active_session_id = session_param or generated_session_id
+        active_session = (
+            _load_voting_session(output_dir, active_session_id)
+            if active_session_id
+            else None
+        )
+
+        if active_session:
+            st.markdown(f"#### Current session: `{active_session['id']}`")
+            st.caption(f"Status: {active_session.get('status', 'unknown')}")
+            variants = active_session.get("variants", [])
+            votes = active_session.get("votes", {}) if isinstance(active_session, dict) else {}
+            if not variants:
+                st.warning("This session has no stored variants.")
+            else:
+                voted_key = f"voted::{active_session['id']}"
+                has_voted = st.session_state.get(voted_key)
+                for variant in variants:  # type: ignore[assignment]
+                    if not isinstance(variant, dict):
+                        continue
+                    persona_label = variant.get("persona", "unknown")
+                    st.markdown(f"**{persona_label}**")
+                    image_path = variant.get("image")
+                    if isinstance(image_path, str) and pathlib.Path(image_path).exists():
+                        st.image(str(image_path))
+                    prompt_text = variant.get("prompt", "")
+                    if prompt_text:
+                        st.caption(prompt_text)
+                    if active_session.get("status") == "open":
+                        if not has_voted and st.button(
+                            f"Vote for {persona_label}", key=f"vote::{persona_label}"
+                        ):
+                            votes[persona_label] = int(votes.get(persona_label, 0)) + 1
+                            active_session["votes"] = votes
+                            _save_voting_session(output_dir, active_session)
+                            st.session_state[voted_key] = persona_label
+                            st.success("Vote recorded! Share the link so others can vote.")
+                    else:
+                        st.info("Voting closed.")
+
+                if active_session.get("status") == "closed" or st.session_state.get(voted_key):
+                    st.markdown("#### Live results")
+                    vote_items = sorted(
+                        votes.items(), key=lambda item: item[1], reverse=True
+                    )
+                    for persona_label, count in vote_items:
+                        st.write(f"{persona_label}: **{count}** votes")
+        else:
+            st.info(
+                "Create a new voting session or open a shared link with ?session=<id> to view voting."
+            )
+
+        if active_session and active_session.get("status") == "open":
+            if stop_col.button(
+                "Stop voting and show results", use_container_width=True
+            ):
+                active_session["status"] = "closed"
+                _save_voting_session(output_dir, active_session)
+                st.experimental_set_query_params(session=active_session["id"])
+                st.success("Voting stopped. Results are now visible to everyone with the link.")
 
     with personas_tab:
         st.subheader("Persona library")
