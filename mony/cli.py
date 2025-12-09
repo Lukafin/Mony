@@ -456,6 +456,111 @@ def prepare_reference_inputs(values: Sequence[str]) -> List[ReferenceInput]:
     return references
 
 
+def _decode_base64_image_data(value: str) -> bytes:
+    """Decode plain base64 strings or full data URLs into binary bytes."""
+
+    data = value.strip()
+    if not data:
+        raise ImageGenerationError("Empty base64 image data in response")
+    if data.startswith("data:image/"):
+        try:
+            base64_index = data.index(",")
+        except ValueError as exc:
+            raise ImageGenerationError("Malformed data URL for image") from exc
+        data = data[base64_index + 1 :]
+    try:
+        return base64.b64decode(data)
+    except Exception as exc:  # pragma: no cover - defensive parsing
+        raise ImageGenerationError("Failed to decode base64 image data") from exc
+
+
+def _extract_inline_base64(entry: dict) -> Optional[str]:
+    inline_data = entry.get("inline_data") or entry.get("inlineData")
+    if isinstance(inline_data, dict):
+        data_value = inline_data.get("data")
+        if isinstance(data_value, str) and data_value.strip():
+            mime = inline_data.get("mime_type") or inline_data.get("mimeType")
+            if mime and not data_value.startswith("data:"):
+                return f"data:{mime};base64,{data_value.strip()}"
+            return data_value.strip()
+    return None
+
+
+def _extract_image_url(entry: dict) -> Optional[str]:
+    for key in ("image_url", "imageUrl", "url"):
+        candidate = entry.get(key)
+        if isinstance(candidate, dict):
+            url_value = candidate.get("url") or candidate.get("href")
+            if isinstance(url_value, str) and url_value.strip():
+                return url_value.strip()
+        elif isinstance(candidate, str) and candidate.strip():
+            return candidate.strip()
+    return None
+
+
+def _extract_base64_value(entry: dict) -> Optional[str]:
+    for key in ("image_base64", "imageBase64", "b64_json", "b64Json", "data"):
+        value = entry.get(key)
+        if isinstance(value, str) and value.strip():
+            return value.strip()
+    inline_value = _extract_inline_base64(entry)
+    if inline_value:
+        return inline_value
+    return None
+
+
+def _collect_image_entries(message: dict) -> List[dict]:
+    entries: List[dict] = []
+    raw_images = message.get("images")
+    if isinstance(raw_images, dict):
+        entries.append(raw_images)
+    elif isinstance(raw_images, list):
+        entries.extend(entry for entry in raw_images if isinstance(entry, dict))
+
+    content = message.get("content")
+    if isinstance(content, dict):
+        entries.append(content)
+    elif isinstance(content, list):
+        entries.extend(part for part in content if isinstance(part, dict))
+
+    return entries
+
+
+def _log_missing_image_details(model: str, message: dict) -> None:
+    summary = {
+        "message_keys": sorted(message.keys()),
+        "images_type": type(message.get("images")).__name__,
+        "content_type": type(message.get("content")).__name__,
+    }
+    try:
+        serialized = json.dumps(message)
+    except (TypeError, ValueError):
+        serialized = str(message)
+    logger.warning(
+        "Provider response for model=%s did not include usable images. summary=%s payload_preview=%s",
+        model,
+        summary,
+        serialized[:800],
+    )
+
+
+def _download_or_decode_image_entry(model: str, entry: dict) -> Optional[bytes]:
+    url_value = _extract_image_url(entry)
+    if isinstance(url_value, str) and url_value:
+        if url_value.startswith("data:image/"):
+            return _decode_base64_image_data(url_value)
+        logger.debug("Downloading image asset for model=%s from %s", model, url_value)
+        download = requests.get(url_value, timeout=60)
+        download.raise_for_status()
+        return download.content
+
+    base64_value = _extract_base64_value(entry)
+    if isinstance(base64_value, str) and base64_value:
+        return _decode_base64_image_data(base64_value)
+
+    return None
+
+
 def request_image(
     api_key: str,
     prompt: str,
@@ -470,18 +575,15 @@ def request_image(
         "Content-Type": "application/json",
     }
     # Build chat completions payload with image modalities per OpenRouter docs
-    # Build messages content: use plain string when no references for max compatibility
+    parts: List[dict] = [{"type": "text", "text": prompt}]
     if references:
         # Convert internal reference payloads to chat image_url parts
-        parts: List[dict] = [{"type": "text", "text": prompt}]
         for ref in references:
             if "image_url" in ref.payload:
                 parts.append({"type": "image_url", "image_url": {"url": ref.payload["image_url"]}})
             elif "image_base64" in ref.payload:
                 parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{ref.payload['image_base64']}"}})
-        content_value = parts
-    else:
-        content_value = prompt
+    content_value = parts
 
     payload: dict = {
         "model": model,
@@ -492,6 +594,8 @@ def request_image(
             }
         ],
         "modalities": ["image", "text"],
+        "include_reasoning": False,
+        "reasoning": {"exclude": True},
     }
 
     aspect_ratio = derive_aspect_ratio(size)
@@ -554,44 +658,31 @@ def request_image(
         raise ImageGenerationError("OpenRouter response has no choices")
 
     message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
-    images = message.get("images") or []
+    image_entries = _collect_image_entries(message)
+    image_bytes = None
+    for entry in image_entries:
+        image_bytes = _download_or_decode_image_entry(model, entry)
+        if image_bytes:
+            break
 
-    # Fallback: some providers may stream images in content; try to extract if present
-    if not images and isinstance(message.get("content"), list):
-        # Look for dicts with type 'image_url'
-        images = [part for part in message["content"] if isinstance(part, dict) and part.get("type") == "image_url"]
-        # Normalize shape to match expected images format
-        images = [{"image_url": part.get("image_url") or {"url": part.get("url")}} for part in images]
+    if not image_bytes and isinstance(message.get("content"), str):
+        inline_text = message["content"].strip()
+        if inline_text.startswith("data:image/") or inline_text.startswith("http"):
+            image_bytes = _download_or_decode_image_entry(
+                model, {"image_url": inline_text}
+            )
 
-    if not images:
+    if not image_bytes:
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(
-                "Response for model=%s missing images; message payload: %r",
+                "Response for model=%s missing recognizable images; message payload: %r",
                 model,
                 message,
             )
+        _log_missing_image_details(model, message)
         raise ImageGenerationError("OpenRouter response did not include images")
 
-    first = images[0]
-    image_url_info = first.get("image_url") or {}
-    url_value = image_url_info.get("url")
-    if not url_value or not isinstance(url_value, str):
-        raise ImageGenerationError("Image URL missing in response")
-
-    if url_value.startswith("data:image/"):
-        # data URL: data:image/png;base64,....
-        try:
-            base64_index = url_value.index(",")
-            b64 = url_value[base64_index + 1 :]
-        except ValueError:
-            raise ImageGenerationError("Malformed data URL for image")
-        return base64.b64decode(b64)
-
-    # Otherwise download the image from the provided URL
-    logger.debug("Downloading image asset for model=%s from %s", model, url_value)
-    download = requests.get(url_value, timeout=60)
-    download.raise_for_status()
-    return download.content
+    return image_bytes
 
 
 def save_image(content: bytes, output_dir: pathlib.Path, designer_name: str) -> pathlib.Path:

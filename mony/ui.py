@@ -360,7 +360,7 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    query_params = st.experimental_get_query_params()
+    query_params = st.query_params
     session_param = query_params.get("session", [None])[0]
 
     research_tab, history_tab, generate_tab, voting_tab, personas_tab = st.tabs(
