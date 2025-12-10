@@ -388,6 +388,145 @@ def research_trendy_designer_prompt(
     return filename
 
 
+def _extract_text_from_openrouter_message(message: object) -> str:
+    """Extract textual content from an OpenRouter chat message."""
+
+    content = getattr(message, "content", None)
+    if isinstance(message, dict):
+        content = message.get("content", content)
+
+    if isinstance(content, str):
+        return content.strip()
+
+    if isinstance(content, list):
+        texts: List[str] = []
+        for part in content:
+            candidate = None
+            if isinstance(part, str):
+                candidate = part
+            elif isinstance(part, dict):
+                candidate = part.get("text") or part.get("content")
+            else:
+                candidate = getattr(part, "text", None)
+            if candidate:
+                candidate = str(candidate).strip()
+                if candidate:
+                    texts.append(candidate)
+        return "\n\n".join(texts).strip()
+
+    return ""
+
+
+def create_persona_from_image(
+    designer_dir: pathlib.Path,
+    persona_name: str,
+    *,
+    api_key: str,
+    model: str,
+    image_bytes: bytes,
+    instructions: Optional[str] = None,
+) -> pathlib.Path:
+    """Create and persist a designer persona markdown using an image as input."""
+
+    slug = sanitize_designer_slug(persona_name)
+    if not persona_name.strip():
+        raise DesignerPromptError("Provide a persona name before creating it from an image.")
+    if not api_key.strip():
+        raise DesignerPromptError("OPENROUTER_API_KEY is required to create a persona from an image.")
+    if not image_bytes:
+        raise DesignerPromptError("Upload an image to derive a persona.")
+
+    headers = {
+        "Authorization": f"Bearer {api_key.strip()}",
+        "HTTP-Referer": "https://github.com/",
+        "X-Title": "Mony Persona Creator",
+        "Content-Type": "application/json",
+    }
+
+    encoded_image = base64.b64encode(image_bytes).decode("ascii")
+    guidance = (
+        instructions
+        or (
+            "Analyze this UI or visual style image and write a concise designer persona prompt "
+            "for generating UI concept art. Describe color palette, typography, layout, motion "
+            "and signature flourishes in 4-6 sentences. Do not include markdown headings."
+        )
+    ).strip()
+    if not guidance:
+        guidance = (
+            "Analyze this UI/visual style image and produce a concise designer persona prompt "
+            "for UI concept art."
+        )
+
+    payload: dict = {
+        "model": model.strip(),
+        "messages": [
+            {
+                "role": "system",
+                "content": (
+                    "You are a senior creative director. Given an image, you write a concise, "
+                    "actionable designer persona prompt suitable for generating UI concept art."
+                ),
+            },
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": guidance},
+                    {
+                        "type": "input_image",
+                        "inline_data": {
+                            "mime_type": "image/png",
+                            "data": encoded_image,
+                        },
+                    },
+                ],
+            }
+        ],
+        "modalities": ["text"],
+        "include_reasoning": False,
+        "reasoning": {"exclude": True},
+    }
+
+    logger.info("Creating persona '%s' from image via model=%s", slug, model)
+    try:
+        response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+    except Exception as exc:  # pragma: no cover - network failure handling
+        raise DesignerPromptError(f"Failed to call OpenRouter: {exc}") from exc
+
+    if response.status_code >= 400:
+        logger.error(
+            "OpenRouter API responded with status=%s for model=%s: %s",
+            response.status_code,
+            model,
+            response.text[:500],
+        )
+        raise DesignerPromptError(
+            f"OpenRouter API returned status {response.status_code}: {response.text}"
+        )
+
+    try:
+        data = response.json()
+    except json.JSONDecodeError as exc:  # pragma: no cover - defensive parsing
+        raise DesignerPromptError("Failed to parse OpenRouter response as JSON") from exc
+
+    choices = data.get("choices") if isinstance(data, dict) else None
+    if not choices or not isinstance(choices, list):
+        raise DesignerPromptError("OpenRouter response did not include choices.")
+
+    message = choices[0].get("message", {}) if isinstance(choices[0], dict) else {}
+    persona_text = _extract_text_from_openrouter_message(message).strip()
+    if not persona_text:
+        raise DesignerPromptError("OpenRouter response did not contain persona text.")
+
+    ensure_output_dir(designer_dir)
+    filename = designer_dir / f"{slug}.md"
+    if not persona_text.endswith("\n"):
+        persona_text += "\n"
+    filename.write_text(persona_text)
+    logger.info("Saved image-derived persona prompt to %s", filename)
+    return filename
+
+
 def run_designer_research(
     designer_dir: pathlib.Path,
     names: Sequence[str],

@@ -990,6 +990,62 @@ def run() -> None:
     with personas_tab:
         st.subheader("Persona library")
         st.write("Inspect and edit the saved persona prompt files in your designer directory.")
+        st.markdown("### Create persona from image (Gemini 3 via OpenRouter)")
+        new_persona_name = st.text_input(
+            "Persona name",
+            key="persona_from_image_name",
+            placeholder="e.g., Calm Minimalist Director",
+        )
+        uploaded_persona_image = st.file_uploader(
+            "Upload reference image",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="persona_from_image_upload",
+            help="The model will analyze this image to derive the persona prompt.",
+        )
+        persona_image_guidance = st.text_area(
+            "Guidance for persona extraction",
+            key="persona_from_image_guidance",
+            height=140,
+            value=(
+                "Analyze this UI/visual style image and write a concise designer persona prompt "
+                "for generating UI concept art. Describe palette, typography, layout, motion, and "
+                "signature flourishes in 4-6 sentences. Do not include markdown headings."
+            ),
+        )
+        if st.button(
+            "Create persona from image",
+            key="persona_from_image_button",
+            type="primary",
+            use_container_width=True,
+        ):
+            if not new_persona_name.strip():
+                st.error("Provide a persona name before creating it from an image.")
+            elif not api_key.strip():
+                st.error("Set an OpenRouter API key in the sidebar before creating a persona.")
+            elif not uploaded_persona_image:
+                st.error("Upload an image to derive a persona.")
+            else:
+                with st.spinner("Creating persona from image via Gemini 3..."):
+                    try:
+                        path = cli.create_persona_from_image(
+                            designer_dir,
+                            new_persona_name.strip(),
+                            api_key=api_key,
+                            model=model,
+                            image_bytes=uploaded_persona_image.getvalue(),
+                            instructions=persona_image_guidance,
+                        )
+                    except cli.DesignerPromptError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # pragma: no cover - runtime feedback
+                        st.error(f"Unexpected error while creating persona: {exc}")
+                    else:
+                        st.success(f"Saved new persona to {path.name}. It will appear in the list below.")
+                        st.session_state["persona_editor_selector"] = path.stem
+                        st.rerun()
+
+        st.divider()
+
         if not available_designers:
             st.info(
                 "No personas available. Research or add personas first, then return to edit them."
@@ -1005,6 +1061,22 @@ def run() -> None:
                 editor_key = _ensure_persona_state(
                     designer_dir, persona_to_edit, prefix=PERSONA_EDITOR_PREFIX
                 )
+                prompt_key = _persona_state_key(PROMPT_EDIT_PREFIX, persona_to_edit)
+                pending_persona_updates = st.session_state.pop(
+                    "_persona_editor_pending", {}
+                )
+                if isinstance(pending_persona_updates, dict):
+                    pending_value = pending_persona_updates.get(persona_to_edit)
+                    if pending_value is not None:
+                        st.session_state[editor_key] = pending_value
+                pending_prompt_updates = st.session_state.pop(
+                    "_prompt_editor_pending", {}
+                )
+                if isinstance(pending_prompt_updates, dict):
+                    pending_prompt_value = pending_prompt_updates.get(prompt_key)
+                    if pending_prompt_value is not None:
+                        st.session_state[prompt_key] = pending_prompt_value
+
                 persona_file = _designer_prompt_file(designer_dir, persona_to_edit)
                 st.caption(f"File: `{persona_file}`")
                 st.text_area(
@@ -1029,44 +1101,46 @@ def run() -> None:
                     except OSError as exc:  # pragma: no cover - user environment dependent
                         st.error(f"Failed to save persona: {exc}")
                     else:
-                        _set_persona_state(
-                            designer_dir,
-                            persona_to_edit,
-                            prefix=PERSONA_EDITOR_PREFIX,
-                            value=updated_text,
-                        )
+                        pending = st.session_state.get("_persona_editor_pending", {})
+                        if not isinstance(pending, dict):
+                            pending = {}
+                        pending[persona_to_edit] = updated_text
+                        st.session_state["_persona_editor_pending"] = pending
+
                         prompt_key = _persona_state_key(
                             PROMPT_EDIT_PREFIX, persona_to_edit
                         )
-                        if prompt_key in st.session_state:
-                            _set_persona_state(
-                                designer_dir,
-                                persona_to_edit,
-                                prefix=PROMPT_EDIT_PREFIX,
-                                value=updated_text,
-                            )
+                        prompt_pending = st.session_state.get(
+                            "_prompt_editor_pending", {}
+                        )
+                        if not isinstance(prompt_pending, dict):
+                            prompt_pending = {}
+                        prompt_pending[prompt_key] = updated_text
+                        st.session_state["_prompt_editor_pending"] = prompt_pending
                         st.success(f"Saved updates to {persona_file.name}.")
+                        st.rerun()
                 if reload_col.button(
                     "Reload from file",
                     key=f"reload_persona_{persona_to_edit}",
                     use_container_width=True,
                 ):
                     refreshed_text = _load_persona_text(designer_dir, persona_to_edit)
-                    _set_persona_state(
-                        designer_dir,
-                        persona_to_edit,
-                        prefix=PERSONA_EDITOR_PREFIX,
-                        value=refreshed_text,
-                    )
+                    pending = st.session_state.get("_persona_editor_pending", {})
+                    if not isinstance(pending, dict):
+                        pending = {}
+                    pending[persona_to_edit] = refreshed_text
+                    st.session_state["_persona_editor_pending"] = pending
+
                     prompt_key = _persona_state_key(PROMPT_EDIT_PREFIX, persona_to_edit)
-                    if prompt_key in st.session_state:
-                        _set_persona_state(
-                            designer_dir,
-                            persona_to_edit,
-                            prefix=PROMPT_EDIT_PREFIX,
-                            value=refreshed_text,
-                        )
-                    st.info("Persona reloaded from disk.")
+                    prompt_pending = st.session_state.get(
+                        "_prompt_editor_pending", {}
+                    )
+                    if not isinstance(prompt_pending, dict):
+                        prompt_pending = {}
+                    prompt_pending[prompt_key] = refreshed_text
+                    st.session_state["_prompt_editor_pending"] = prompt_pending
+                    st.info("Persona reloaded from disk. Refreshing editor...")
+                    st.rerun()
 
 
 if __name__ == "__main__":
