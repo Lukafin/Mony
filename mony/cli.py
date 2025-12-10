@@ -39,14 +39,49 @@ if not DEFAULT_DESIGNER_DIR.exists():
 
 
 DEFAULT_RESEARCH_INSTRUCTIONS = (
-    "You are an award-winning UI creative director who researches cutting-edge digital "
-    "product design trends. Using reputable, current sources, summarize the most "
-    "influential UI/UX aesthetics, interaction patterns, and visual motifs gaining "
-    "traction in {year}. Synthesize them into a concise creative brief for a designer "
-    "persona named '{name}'. Focus on color palettes, typography, layout structures, "
-    "motion principles, and signature flourishes that should inspire UI concept art. "
-    "Provide actionable instructions suitable for a text-to-image prompt. Limit the "
-    "response to 4-6 sentences without markdown headings."
+    "You are an award-winning UI creative director and design trend researcher. "
+    "Your task is to research and synthesize cutting-edge digital product design trends "
+    "for {year} into a compelling designer persona named '{name}'.\n\n"
+    
+    "## Research Focus Areas\n"
+    "Investigate the following aspects using reputable, current sources (Dribbble, Behance, "
+    "Awwwards, design blogs, major product launches, design system updates):\n\n"
+    
+    "**Visual Language:**\n"
+    "- Color palettes: dominant colors, accent combinations, gradient trends, dark/light mode approaches\n"
+    "- Typography: trending typefaces, font pairings, sizing conventions, variable font usage\n"
+    "- Iconography: style (outlined, filled, duotone), sizing, animation treatments\n"
+    "- Imagery: illustration styles, photography treatments, 3D elements, AI-generated art\n\n"
+    
+    "**Layout & Structure:**\n"
+    "- Grid systems and spacing conventions\n"
+    "- Component patterns (cards, modals, navigation)\n"
+    "- Responsive and mobile-first approaches\n"
+    "- Bento grids, asymmetric layouts, or structured systems\n\n"
+    
+    "**Interaction & Motion:**\n"
+    "- Micro-interactions and feedback patterns\n"
+    "- Page transitions and scroll behaviors\n"
+    "- Loading states and skeleton screens\n"
+    "- Gesture-based interactions\n\n"
+    
+    "**Emerging Techniques:**\n"
+    "- Glass morphism, neumorphism, or new visual effects\n"
+    "- AI-assisted design elements\n"
+    "- Accessibility innovations\n"
+    "- Cross-platform design language evolution\n\n"
+    
+    "## Output Format\n"
+    "Synthesize your research into a concise, actionable creative brief (4-8 sentences). "
+    "The persona should:\n"
+    "- Have a distinct personality and design philosophy\n"
+    "- Include specific, implementable visual guidelines\n"
+    "- Reference real-world inspiration sources\n"
+    "- Be suitable for guiding UI concept generation\n\n"
+    
+    "Write in second person ('You are...') as instructions for a designer. "
+    "Avoid markdown headings in the output. Focus on what makes this persona unique "
+    "and timely for {year}."
 )
 
 
