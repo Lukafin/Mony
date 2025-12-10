@@ -11,6 +11,7 @@ personas and generating concept images through the OpenRouter image API.
 - Generate concept images for each selected designer using OpenRouter.
 - Preview prompts without generating images via `--dry-run` mode.
 - Supply one or more reference images or URLs to steer the generation results.
+- Edit persona prompts directly inside the Streamlit UI (per-run overrides or saved files).
 
 ## Installation
 
@@ -48,10 +49,16 @@ streamlit run mony/ui.py
 ```
 
 The UI loads designer personas from the configured directory, lets you upload or
-link reference imagery, and displays generated outputs inline. The research tab
-now includes a text area that lets you customize the Perplexity instructions used
-to generate new personas—`{name}` and `{year}` placeholders are replaced for you,
-so you can tailor the brief toward specific industries or visual goals.
+link reference imagery, and displays generated outputs inline. When you choose
+personas on the Generate tab you can expand each one to review and tweak the
+prompt just for that run. A dedicated Personas tab now exposes the stored
+markdown files so you can edit and save persona prompts on disk without leaving
+the app. The research tab also includes a text area that lets you customize the
+Perplexity instructions used to generate new personas—`{name}` and `{year}`
+placeholders are replaced for you, so you can tailor the brief toward specific
+industries or visual goals. Use the Settings tab to set a username/password so the
+app requires a quick login whenever it launches—credentials are stored as salted
+hashes and repeated failures trigger a temporary lockout.
 
 #### Run the Streamlit UI inside a virtual environment
 
