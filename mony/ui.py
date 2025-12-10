@@ -361,17 +361,30 @@ def run() -> None:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
     query_params = st.query_params
-    session_param = query_params.get("session", [None])[0]
+    session_param = query_params.get("session")
 
-    research_tab, history_tab, generate_tab, voting_tab, personas_tab = st.tabs(
-        [
+    # If a session param is present, prioritize showing the Voting tab first
+    if session_param:
+        tab_labels = [
+            "Voting",
+            "Research personas",
+            "Research history",
+            "Generate images",
+            "Personas",
+        ]
+        tabs = st.tabs(tab_labels)
+        voting_tab, research_tab, history_tab, generate_tab, personas_tab = tabs
+    else:
+        tab_labels = [
             "Research personas",
             "Research history",
             "Generate images",
             "Voting",
             "Personas",
         ]
-    )
+        research_tab, history_tab, generate_tab, voting_tab, personas_tab = st.tabs(
+            tab_labels
+        )
 
     with research_tab:
         st.subheader("Research trendy designer personas")
@@ -685,6 +698,13 @@ def run() -> None:
             "and collect quick votes from collaborators."
         )
 
+        base_url = st.text_input(
+            "App base URL for sharing",
+            value=st.session_state.get("_app_base_url", "http://localhost:8501"),
+            help="Used to build full voting links to share (include protocol and port).",
+        ).strip() or "http://localhost:8501"
+        st.session_state["_app_base_url"] = base_url
+
         voting_description = st.text_area(
             "Project brief for this voting round",
             height=120,
@@ -770,10 +790,11 @@ def run() -> None:
                     _save_voting_session(output_dir, session_data)
                     generated_session_id = session_data["id"]
                     st.session_state["_active_voting_session"] = generated_session_id
-                    st.experimental_set_query_params(session=generated_session_id)
+                    st.query_params["session"] = generated_session_id
                     st.success("Voting session created. Share the link below.")
-                    share_link = f"?session={generated_session_id}"
+                    share_link = f"{base_url.rstrip('/')}/?session={generated_session_id}"
                     st.code(share_link, language="text")
+                    st.info("Copy and share this URL (relative to your app base) with voters.")
                 else:
                     st.info("No images were generated for this voting round.")
 
@@ -787,6 +808,10 @@ def run() -> None:
         if active_session:
             st.markdown(f"#### Current session: `{active_session['id']}`")
             st.caption(f"Status: {active_session.get('status', 'unknown')}")
+            share_link = f"{base_url.rstrip('/')}/?session={active_session['id']}"
+            st.write("Share this voting link:")
+            st.code(share_link, language="text")
+            st.info("Copy and share this URL (relative to your app base) with voters.")
             variants = active_session.get("variants", [])
             votes = active_session.get("votes", {}) if isinstance(active_session, dict) else {}
             if not variants:
@@ -835,7 +860,7 @@ def run() -> None:
             ):
                 active_session["status"] = "closed"
                 _save_voting_session(output_dir, active_session)
-                st.experimental_set_query_params(session=active_session["id"])
+                st.query_params["session"] = active_session["id"]
                 st.success("Voting stopped. Results are now visible to everyone with the link.")
 
     with personas_tab:

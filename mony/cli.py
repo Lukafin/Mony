@@ -13,7 +13,7 @@ import sys
 import time
 import threading
 from dataclasses import dataclass
-from typing import Dict, Iterable, List, Optional, Sequence, Tuple
+from typing import Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 import requests
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -105,6 +105,37 @@ class ReferenceInput:
 
     source: str
     payload: dict
+
+
+def _reference_to_message_part(reference: ReferenceInput) -> Optional[dict]:
+    """Convert a ReferenceInput payload into a chat content part."""
+
+    payload = reference.payload or {}
+    ref_type = payload.get("type") or "input_image"
+    part: dict = {"type": ref_type}
+
+    url_value = payload.get("image_url")
+    if isinstance(url_value, dict):
+        part["image_url"] = url_value
+        return part
+    if isinstance(url_value, str) and url_value.strip():
+        part["image_url"] = {"url": url_value.strip()}
+        return part
+
+    base64_value = payload.get("image_base64")
+    if isinstance(base64_value, str) and base64_value.strip():
+        encoded = base64_value.strip()
+        if not encoded.startswith("data:image/"):
+            encoded = f"data:image/png;base64,{encoded}"
+        part["image_url"] = {"url": encoded}
+        return part
+
+    inline_value = payload.get("inline_data")
+    if isinstance(inline_value, dict):
+        part["inline_data"] = inline_value
+        return part
+
+    return None
 
 
 def load_env_file(path: pathlib.Path) -> None:
@@ -389,7 +420,13 @@ def run_designer_research(
 
 def build_prompt(description: str, prompt_template: str, suffix: str = "") -> str:
     description_block = description.strip()
-    full_prompt = f"{prompt_template.strip()}\n\nProject brief: {description_block}"
+    # Explicit instruction prefix to ensure the model generates an actual image
+    # rather than just describing one
+    image_instruction = (
+        "Generate an image of a UI design. Do not describe the image - actually create "
+        "and output the image. The design should follow these guidelines:\n\n"
+    )
+    full_prompt = f"{image_instruction}{prompt_template.strip()}\n\nProject brief: {description_block}"
     if suffix:
         full_prompt = f"{full_prompt}\n\nAdditional guidance: {suffix.strip()}"
     return full_prompt
@@ -540,7 +577,7 @@ def _log_missing_image_details(model: str, message: dict) -> None:
         "Provider response for model=%s did not include usable images. summary=%s payload_preview=%s",
         model,
         summary,
-        serialized[:800],
+        serialized,
     )
 
 
@@ -575,15 +612,16 @@ def request_image(
         "Content-Type": "application/json",
     }
     # Build chat completions payload with image modalities per OpenRouter docs
-    parts: List[dict] = [{"type": "text", "text": prompt}]
+    content_value: Union[str, List[dict]]
     if references:
-        # Convert internal reference payloads to chat image_url parts
+        parts: List[dict] = [{"type": "input_text", "text": prompt}]
         for ref in references:
-            if "image_url" in ref.payload:
-                parts.append({"type": "image_url", "image_url": {"url": ref.payload["image_url"]}})
-            elif "image_base64" in ref.payload:
-                parts.append({"type": "image_url", "image_url": {"url": f"data:image/png;base64,{ref.payload['image_base64']}"}})
-    content_value = parts
+            part = _reference_to_message_part(ref)
+            if part:
+                parts.append(part)
+        content_value = parts
+    else:
+        content_value = prompt
 
     payload: dict = {
         "model": model,
@@ -646,7 +684,7 @@ def request_image(
         logger.debug(
             "Raw provider response for model=%s: %s",
             model,
-            serialized[:2000],
+            serialized,
         )
 
     # Parse images from chat completions-style response
@@ -671,6 +709,14 @@ def request_image(
             image_bytes = _download_or_decode_image_entry(
                 model, {"image_url": inline_text}
             )
+        # Also scan for embedded data URLs within the text content
+        if not image_bytes:
+            data_url_match = re.search(r'data:image/[^;]+;base64,[A-Za-z0-9+/=]+', inline_text)
+            if data_url_match:
+                logger.debug("Found embedded data URL in text content for model=%s", model)
+                image_bytes = _download_or_decode_image_entry(
+                    model, {"image_url": data_url_match.group(0)}
+                )
 
     if not image_bytes:
         if logger.isEnabledFor(logging.DEBUG):
