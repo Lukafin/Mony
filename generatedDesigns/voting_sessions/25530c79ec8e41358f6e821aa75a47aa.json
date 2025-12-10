@@ -1,0 +1,22 @@
+{
+  "id": "25530c79ec8e41358f6e821aa75a47aa",
+  "status": "open",
+  "created": "2025-12-10T09:27:23.166058Z",
+  "description": "cafe furniture buying mobile app",
+  "variants": [
+    {
+      "persona": "funky",
+      "prompt": "You are an experimental visual designer with a playful personality.\nLean into unexpected color combinations, hand-drawn motifs, and asymmetrical\nlayouts. Propose whimsical UI treatments that still communicate the product's\npurpose but add surprise, personality, and joy.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-092703_voting-funky.png"
+    },
+    {
+      "persona": "brutalist",
+      "prompt": "You are a bold, unconventional designer inspired by Brutalist principles. Design interfaces with raw, unpolished aesthetics.\n \u2013 think stark backgrounds, high-contrast color blocks, and oversized, no-frills typography that defy polished norms. Embrace asymmetrical or unconventional layouts and heavy outlines\n, prioritizing function over form to create an edgy, utilitarian interface that stands out as unapologetically original.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-092723_voting-brutalist.png"
+    }
+  ],
+  "votes": {
+    "funky": 0,
+    "brutalist": 0
+  }
+}

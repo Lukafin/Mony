@@ -4,12 +4,13 @@ from __future__ import annotations
 
 import base64
 import datetime as dt
+import hashlib
+import hmac
 import json
 import os
 import pathlib
-import hashlib
-import hmac
 import time
+import uuid
 from typing import TYPE_CHECKING, Dict, List, Sequence
 
 import streamlit as st
@@ -23,6 +24,7 @@ if TYPE_CHECKING:
 RESEARCH_HISTORY_FILENAME = "research_history.json"
 PROMPT_EDIT_PREFIX = "designer_prompt_edit::"
 PERSONA_EDITOR_PREFIX = "persona_editor::"
+VOTING_PROMPT_PREFIX = "voting_prompt_edit::"
 DEFAULT_CREDENTIALS_FILENAME = "ui_credentials.json"
 AUTH_STATE_KEY = "_mony_authenticated"
 PASSWORD_SALT_BYTES = 16
@@ -306,6 +308,112 @@ def _ensure_env_loaded(env_path: pathlib.Path) -> None:
     st.session_state["_MONY_ENV_LOADED"] = True
 
 
+def _voting_session_dir(output_dir: pathlib.Path) -> pathlib.Path:
+    """Return the directory where voting sessions are stored."""
+
+    return output_dir / "voting_sessions"
+
+
+def _voting_session_file(output_dir: pathlib.Path, session_id: str) -> pathlib.Path:
+    """Return the path to a voting session JSON file."""
+
+    return _voting_session_dir(output_dir) / f"{session_id}.json"
+
+
+def _load_voting_session(
+    output_dir: pathlib.Path, session_id: str
+) -> Dict[str, object] | None:
+    """Load a persisted voting session from disk if available."""
+
+    path = _voting_session_file(output_dir, session_id)
+    if not path.exists():
+        return None
+    try:
+        data = json.loads(path.read_text())
+    except Exception:
+        return None
+    return data if isinstance(data, dict) else None
+
+
+def _save_voting_session(output_dir: pathlib.Path, data: Dict[str, object]) -> None:
+    """Persist the voting session JSON to disk."""
+
+    sessions_dir = _voting_session_dir(output_dir)
+    cli.ensure_output_dir(sessions_dir)
+    session_id = data.get("id") or uuid.uuid4().hex
+    data["id"] = session_id
+    path = _voting_session_file(output_dir, session_id)
+    path.write_text(json.dumps(data, indent=2))
+
+
+def _parse_timestamp(value: object) -> dt.datetime | None:
+    """Parse an ISO-8601 timestamp (including Z suffix) into a datetime."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _format_timestamp(value: object) -> str:
+    """Render a human-friendly timestamp or return an empty string."""
+
+    parsed = _parse_timestamp(value)
+    if not parsed:
+        return ""
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _vote_summary(votes_obj: object) -> tuple[int, Dict[str, int]]:
+    """Normalize vote counts into ints and return (total, per_persona)."""
+
+    normalized: Dict[str, int] = {}
+    if isinstance(votes_obj, dict):
+        for key, raw_value in votes_obj.items():
+            try:
+                normalized[str(key)] = int(raw_value)
+            except Exception:
+                continue
+    return sum(normalized.values()), normalized
+
+
+def _list_voting_sessions(output_dir: pathlib.Path) -> List[Dict[str, object]]:
+    """Load and sort past voting sessions by creation time."""
+
+    sessions_dir = _voting_session_dir(output_dir)
+    if not sessions_dir.exists():
+        return []
+
+    sessions: List[Dict[str, object]] = []
+    for path in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+
+        created_dt = _parse_timestamp(data.get("created"))
+        if not created_dt:
+            try:
+                created_dt = dt.datetime.fromtimestamp(path.stat().st_mtime)
+            except OSError:
+                created_dt = None
+
+        data["id"] = str(data.get("id") or path.stem)
+        data["_created_dt"] = created_dt
+        data["_path"] = str(path)
+        sessions.append(data)
+
+    sessions.sort(
+        key=lambda item: item.get("_created_dt") or dt.datetime.fromtimestamp(0),
+        reverse=True,
+    )
+    return sessions
+
+
 def _display_generated_image(path: pathlib.Path, label: str) -> None:
     """Display an image from disk with a caption inside the Streamlit app."""
 
@@ -498,15 +606,42 @@ def run() -> None:
     if perplexity_api_key:
         os.environ["PERPLEXITY_API_KEY"] = perplexity_api_key
 
-    research_tab, history_tab, generate_tab, personas_tab, settings_tab = st.tabs(
-        [
-            "Research personas",
-            "Research history",
-            "Generate images",
-            "Personas",
-            "Settings",
+    query_params = st.query_params
+    session_param = query_params.get("session")
+
+    base_tab_labels = [
+        "Research personas",
+        "Research history",
+        "Generate images",
+        "Voting",
+        "Personas",
+        "Settings",
+    ]
+    if session_param:
+        tab_labels = ["Voting"] + [
+            label for label in base_tab_labels if label != "Voting"
         ]
-    )
+    else:
+        tab_labels = base_tab_labels
+    tabs = st.tabs(tab_labels)
+    if session_param:
+        (
+            voting_tab,
+            research_tab,
+            history_tab,
+            generate_tab,
+            personas_tab,
+            settings_tab,
+        ) = tabs
+    else:
+        (
+            research_tab,
+            history_tab,
+            generate_tab,
+            voting_tab,
+            personas_tab,
+            settings_tab,
+        ) = tabs
 
     with research_tab:
         st.subheader("Research trendy designer personas")
@@ -813,9 +948,293 @@ def run() -> None:
                             "No images were generated. Ensure you selected a designer or provided a custom persona."
                         )
 
+    with voting_tab:
+        st.subheader("Persona variations voting")
+        st.write(
+            "Create small prompt variations for multiple personas, generate images, "
+            "and collect quick votes from collaborators."
+        )
+
+        base_url = st.text_input(
+            "App base URL for sharing",
+            value=st.session_state.get("_app_base_url", "http://localhost:8501"),
+            help="Used to build full voting links to share (include protocol and port).",
+        ).strip() or "http://localhost:8501"
+        st.session_state["_app_base_url"] = base_url
+
+        voting_description = st.text_area(
+            "Project brief for this voting round",
+            height=120,
+            key="voting_description",
+        )
+
+        selected_voting_personas = st.multiselect(
+            "Choose personas to compare (up to 3)",
+            available_designers,
+            max_selections=3,
+            key="voting_persona_selector",
+        )
+
+        if selected_voting_personas:
+            st.markdown("#### Tweak prompts for each variation")
+            for persona_name in selected_voting_personas:
+                editor_key = _ensure_persona_state(
+                    designer_dir, persona_name, prefix=VOTING_PROMPT_PREFIX
+                )
+                st.text_area(
+                    f"Prompt for {persona_name}",
+                    key=editor_key,
+                    height=140,
+                )
+        else:
+            st.info("Select personas to prepare voting variations.")
+
+        create_col, stop_col = st.columns(2)
+        generated_session_id = st.session_state.get("_active_voting_session")
+
+        if create_col.button(
+            "Create variations and start voting", type="primary", use_container_width=True
+        ):
+            if not selected_voting_personas:
+                st.error("Select at least one persona to create variations.")
+            elif not voting_description.strip():
+                st.error("Provide a project brief before generating variations.")
+            else:
+                results: List[Dict[str, object]] = []
+                votes: Dict[str, int] = {}
+                with st.spinner("Generating persona variations..."):
+                    for persona_name in selected_voting_personas:
+                        prompt_key = _persona_state_key(
+                            VOTING_PROMPT_PREFIX, persona_name
+                        )
+                        prompt_text = st.session_state.get(prompt_key, "")
+                        try:
+                            full_prompt = cli.build_prompt(
+                                voting_description, prompt_text, prompt_suffix
+                            )
+                            image_bytes = cli.request_image(
+                                api_key.strip(),
+                                full_prompt,
+                                model.strip(),
+                                size.strip(),
+                                references=[],
+                            )
+                            image_path = cli.save_image(
+                                image_bytes, output_dir, f"voting-{persona_name}"
+                            )
+                        except Exception as exc:  # pragma: no cover - runtime feedback
+                            st.error(f"Failed to generate for {persona_name}: {exc}")
+                            continue
+
+                        votes[persona_name] = 0
+                        results.append(
+                            {
+                                "persona": persona_name,
+                                "prompt": prompt_text,
+                                "image": str(image_path),
+                            }
+                        )
+
+                if results:
+                    session_data: Dict[str, object] = {
+                        "id": uuid.uuid4().hex,
+                        "status": "open",
+                        "created": dt.datetime.utcnow().isoformat() + "Z",
+                        "description": voting_description,
+                        "variants": results,
+                        "votes": votes,
+                    }
+                    _save_voting_session(output_dir, session_data)
+                    generated_session_id = session_data["id"]
+                    st.session_state["_active_voting_session"] = generated_session_id
+                    st.query_params["session"] = generated_session_id
+                    st.success("Voting session created. Share the link below.")
+                    share_link = f"{base_url.rstrip('/')}/?session={generated_session_id}"
+                    st.code(share_link, language="text")
+                    st.info("Copy and share this URL (relative to your app base) with voters.")
+                else:
+                    st.info("No images were generated for this voting round.")
+
+        active_session_id = session_param or generated_session_id
+        active_session = (
+            _load_voting_session(output_dir, active_session_id)
+            if active_session_id
+            else None
+        )
+
+        if active_session:
+            st.markdown(f"#### Current session: `{active_session['id']}`")
+            st.caption(f"Status: {active_session.get('status', 'unknown')}")
+            share_link = f"{base_url.rstrip('/')}/?session={active_session['id']}"
+            st.write("Share this voting link:")
+            st.code(share_link, language="text")
+            st.info("Copy and share this URL (relative to your app base) with voters.")
+            variants = active_session.get("variants", [])
+            votes = active_session.get("votes", {}) if isinstance(active_session, dict) else {}
+            if not variants:
+                st.warning("This session has no stored variants.")
+            else:
+                voted_key = f"voted::{active_session['id']}"
+                has_voted = st.session_state.get(voted_key)
+                for variant in variants:  # type: ignore[assignment]
+                    if not isinstance(variant, dict):
+                        continue
+                    persona_label = variant.get("persona", "unknown")
+                    st.markdown(f"**{persona_label}**")
+                    image_path = variant.get("image")
+                    if isinstance(image_path, str) and pathlib.Path(image_path).exists():
+                        st.image(str(image_path))
+                    prompt_text = variant.get("prompt", "")
+                    if prompt_text:
+                        st.caption(prompt_text)
+                    if active_session.get("status") == "open":
+                        if not has_voted and st.button(
+                            f"Vote for {persona_label}", key=f"vote::{persona_label}"
+                        ):
+                            votes[persona_label] = int(votes.get(persona_label, 0)) + 1
+                            active_session["votes"] = votes
+                            _save_voting_session(output_dir, active_session)
+                            st.session_state[voted_key] = persona_label
+                            st.success("Vote recorded! Share the link so others can vote.")
+                    else:
+                        st.info("Voting closed.")
+
+                if active_session.get("status") == "closed" or st.session_state.get(voted_key):
+                    st.markdown("#### Live results")
+                    vote_items = sorted(
+                        votes.items(), key=lambda item: item[1], reverse=True
+                    )
+                    for persona_label, count in vote_items:
+                        st.write(f"{persona_label}: **{count}** votes")
+        else:
+            st.info(
+                "Create a new voting session or open a shared link with ?session=<id> to view voting."
+            )
+
+        if active_session and active_session.get("status") == "open":
+            if stop_col.button(
+                "Stop voting and show results", use_container_width=True
+            ):
+                active_session["status"] = "closed"
+                _save_voting_session(output_dir, active_session)
+                st.query_params["session"] = active_session["id"]
+                st.success("Voting stopped. Results are now visible to everyone with the link.")
+
+        st.divider()
+        st.markdown("### Past voting sessions")
+        past_sessions = _list_voting_sessions(output_dir)
+        if not past_sessions:
+            st.info("No past voting sessions found.")
+        else:
+            for session in past_sessions:
+                sess_id = str(session.get("id", ""))
+                description = session.get("description", "(no description)")
+                status = session.get("status", "unknown")
+                created_text = _format_timestamp(session.get("created"))
+                variants = session.get("variants", [])
+                total_votes, normalized_votes = _vote_summary(session.get("votes"))
+                header_parts = [description, status]
+                if created_text:
+                    header_parts.append(created_text)
+                header = " — ".join(header_parts)
+
+                with st.expander(header):
+                    st.caption(f"Session ID: {sess_id}")
+                    st.caption(f"Total variants: {len(variants)} | Total votes: {total_votes}")
+                    if st.button(
+                        "Open session",
+                        key=f"open_session::{sess_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_active_voting_session"] = sess_id
+                        st.query_params["session"] = sess_id
+                        st.success("Loaded session. Scroll up to view or share.")
+
+                    if variants:
+                        for variant in variants:  # type: ignore[assignment]
+                            if not isinstance(variant, dict):
+                                continue
+                            persona_label = variant.get("persona", "unknown")
+                            st.markdown(f"**{persona_label}**")
+                            image_path = variant.get("image")
+                            if isinstance(image_path, str) and pathlib.Path(image_path).exists():
+                                st.image(str(image_path))
+                            elif isinstance(image_path, str):
+                                st.caption(f"Image missing at {image_path}")
+                            prompt_text = variant.get("prompt", "")
+                            if prompt_text:
+                                st.caption(prompt_text)
+                            if persona_label in normalized_votes:
+                                st.write(f"Votes: {normalized_votes[persona_label]}")
+                    else:
+                        st.info("No variants stored for this session.")
+
+                    if normalized_votes:
+                        st.markdown("**Votes**")
+                        for persona_label, count in sorted(
+                            normalized_votes.items(), key=lambda item: item[1], reverse=True
+                        ):
+                            st.write(f"{persona_label}: {count}")
+
     with personas_tab:
         st.subheader("Persona library")
         st.write("Inspect and edit the saved persona prompt files in your designer directory.")
+        st.markdown("### Create persona from image (Gemini 3 via OpenRouter)")
+        new_persona_name = st.text_input(
+            "Persona name",
+            key="persona_from_image_name",
+            placeholder="e.g., Calm Minimalist Director",
+        )
+        uploaded_persona_image = st.file_uploader(
+            "Upload reference image",
+            type=["png", "jpg", "jpeg", "webp"],
+            key="persona_from_image_upload",
+            help="The model will analyze this image to derive the persona prompt.",
+        )
+        persona_image_guidance = st.text_area(
+            "Guidance for persona extraction",
+            key="persona_from_image_guidance",
+            height=140,
+            value=(
+                "Analyze this UI/visual style image and write a concise designer persona prompt "
+                "for generating UI concept art. Describe palette, typography, layout, motion, and "
+                "signature flourishes in 4-6 sentences. Do not include markdown headings."
+            ),
+        )
+        if st.button(
+            "Create persona from image",
+            key="persona_from_image_button",
+            type="primary",
+            use_container_width=True,
+        ):
+            if not new_persona_name.strip():
+                st.error("Provide a persona name before creating it from an image.")
+            elif not api_key.strip():
+                st.error("Set an OpenRouter API key in the sidebar before creating a persona.")
+            elif not uploaded_persona_image:
+                st.error("Upload an image to derive a persona.")
+            else:
+                with st.spinner("Creating persona from image via Gemini 3..."):
+                    try:
+                        path = cli.create_persona_from_image(
+                            designer_dir,
+                            new_persona_name.strip(),
+                            api_key=api_key,
+                            model=model,
+                            image_bytes=uploaded_persona_image.getvalue(),
+                            instructions=persona_image_guidance,
+                        )
+                    except cli.DesignerPromptError as exc:
+                        st.error(str(exc))
+                    except Exception as exc:  # pragma: no cover - runtime feedback
+                        st.error(f"Unexpected error while creating persona: {exc}")
+                    else:
+                        st.success(f"Saved new persona to {path.name}. It will appear in the list below.")
+                        st.session_state["persona_editor_selector"] = path.stem
+                        st.rerun()
+
+        st.divider()
+
         if not available_designers:
             st.info(
                 "No personas available. Research or add personas first, then return to edit them."
@@ -831,6 +1250,22 @@ def run() -> None:
                 editor_key = _ensure_persona_state(
                     designer_dir, persona_to_edit, prefix=PERSONA_EDITOR_PREFIX
                 )
+                prompt_key = _persona_state_key(PROMPT_EDIT_PREFIX, persona_to_edit)
+                pending_persona_updates = st.session_state.pop(
+                    "_persona_editor_pending", {}
+                )
+                if isinstance(pending_persona_updates, dict):
+                    pending_value = pending_persona_updates.get(persona_to_edit)
+                    if pending_value is not None:
+                        st.session_state[editor_key] = pending_value
+                pending_prompt_updates = st.session_state.pop(
+                    "_prompt_editor_pending", {}
+                )
+                if isinstance(pending_prompt_updates, dict):
+                    pending_prompt_value = pending_prompt_updates.get(prompt_key)
+                    if pending_prompt_value is not None:
+                        st.session_state[prompt_key] = pending_prompt_value
+
                 persona_file = _designer_prompt_file(designer_dir, persona_to_edit)
                 st.caption(f"File: `{persona_file}`")
                 st.text_area(
@@ -855,44 +1290,46 @@ def run() -> None:
                     except OSError as exc:  # pragma: no cover - user environment dependent
                         st.error(f"Failed to save persona: {exc}")
                     else:
-                        _set_persona_state(
-                            designer_dir,
-                            persona_to_edit,
-                            prefix=PERSONA_EDITOR_PREFIX,
-                            value=updated_text,
-                        )
+                        pending = st.session_state.get("_persona_editor_pending", {})
+                        if not isinstance(pending, dict):
+                            pending = {}
+                        pending[persona_to_edit] = updated_text
+                        st.session_state["_persona_editor_pending"] = pending
+
                         prompt_key = _persona_state_key(
                             PROMPT_EDIT_PREFIX, persona_to_edit
                         )
-                        if prompt_key in st.session_state:
-                            _set_persona_state(
-                                designer_dir,
-                                persona_to_edit,
-                                prefix=PROMPT_EDIT_PREFIX,
-                                value=updated_text,
-                            )
+                        prompt_pending = st.session_state.get(
+                            "_prompt_editor_pending", {}
+                        )
+                        if not isinstance(prompt_pending, dict):
+                            prompt_pending = {}
+                        prompt_pending[prompt_key] = updated_text
+                        st.session_state["_prompt_editor_pending"] = prompt_pending
                         st.success(f"Saved updates to {persona_file.name}.")
+                        st.rerun()
                 if reload_col.button(
                     "Reload from file",
                     key=f"reload_persona_{persona_to_edit}",
                     use_container_width=True,
                 ):
                     refreshed_text = _load_persona_text(designer_dir, persona_to_edit)
-                    _set_persona_state(
-                        designer_dir,
-                        persona_to_edit,
-                        prefix=PERSONA_EDITOR_PREFIX,
-                        value=refreshed_text,
-                    )
+                    pending = st.session_state.get("_persona_editor_pending", {})
+                    if not isinstance(pending, dict):
+                        pending = {}
+                    pending[persona_to_edit] = refreshed_text
+                    st.session_state["_persona_editor_pending"] = pending
+
                     prompt_key = _persona_state_key(PROMPT_EDIT_PREFIX, persona_to_edit)
-                    if prompt_key in st.session_state:
-                        _set_persona_state(
-                            designer_dir,
-                            persona_to_edit,
-                            prefix=PROMPT_EDIT_PREFIX,
-                            value=refreshed_text,
-                        )
-                    st.info("Persona reloaded from disk.")
+                    prompt_pending = st.session_state.get(
+                        "_prompt_editor_pending", {}
+                    )
+                    if not isinstance(prompt_pending, dict):
+                        prompt_pending = {}
+                    prompt_pending[prompt_key] = refreshed_text
+                    st.session_state["_prompt_editor_pending"] = prompt_pending
+                    st.info("Persona reloaded from disk. Refreshing editor...")
+                    st.rerun()
 
     with settings_tab:
         st.subheader("Security settings")

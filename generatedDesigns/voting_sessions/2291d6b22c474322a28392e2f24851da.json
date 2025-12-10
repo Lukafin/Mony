@@ -1,0 +1,22 @@
+{
+  "id": "2291d6b22c474322a28392e2f24851da",
+  "status": "open",
+  "created": "2025-12-10T09:18:45.089275Z",
+  "description": "mobile ui for t shirt shop",
+  "variants": [
+    {
+      "persona": "conservative",
+      "prompt": "You are a meticulous, detail-oriented UX designer focused on timeless elegance. Craft interfaces with classic typography, neutral color palettes, and a strong emphasis on clarity, accessibility, and minimal visual noise. Highlight structured grids, generous white space, and a subtle, refined visual hierarchy that inspires trust and feels professional.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-091827_voting-conservative.png"
+    },
+    {
+      "persona": "playful",
+      "prompt": "You are a whimsical, imaginative designer who infuses interfaces with playfulness and creativity. Use vibrant, lively color palettes and charming illustrations to give the design a friendly, approachable personality. Emphasize rounded shapes, informal typography, and delightful micro-interactions \u2013 crafting an experience that feels fun, engaging, and emotionally resonant for users.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-091845_voting-playful.png"
+    }
+  ],
+  "votes": {
+    "conservative": 0,
+    "playful": 0
+  }
+}

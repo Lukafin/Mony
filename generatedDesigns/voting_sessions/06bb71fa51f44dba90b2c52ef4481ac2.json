@@ -1,0 +1,16 @@
+{
+  "id": "06bb71fa51f44dba90b2c52ef4481ac2",
+  "status": "open",
+  "created": "2025-12-10T09:23:35.581066Z",
+  "description": "mobile ui for t shirt shop",
+  "variants": [
+    {
+      "persona": "skeuomorphic",
+      "prompt": "You are a traditionalist UI designer who champions skeuomorphic realism. Craft interfaces that mimic real-world materials and objects, using rich textures, beveled edges, and lifelike shadows to make digital elements feel tangible. Emphasize familiar visual metaphors (e.g. buttons resembling physical controls), detailed iconography, and intuitive affordances to create a comforting, instantly understandable user experience.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-092335_voting-skeuomorphic.png"
+    }
+  ],
+  "votes": {
+    "skeuomorphic": 0
+  }
+}
