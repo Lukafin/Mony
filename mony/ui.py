@@ -173,6 +173,74 @@ def _save_voting_session(output_dir: pathlib.Path, data: Dict[str, object]) -> N
     path.write_text(json.dumps(data, indent=2))
 
 
+def _parse_timestamp(value: object) -> dt.datetime | None:
+    """Parse an ISO-8601 timestamp (including Z suffix) into a datetime."""
+
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        return dt.datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+
+
+def _format_timestamp(value: object) -> str:
+    """Render a human-friendly timestamp or return an empty string."""
+
+    parsed = _parse_timestamp(value)
+    if not parsed:
+        return ""
+    return parsed.strftime("%Y-%m-%d %H:%M UTC")
+
+
+def _vote_summary(votes_obj: object) -> tuple[int, Dict[str, int]]:
+    """Normalize vote counts into ints and return (total, per_persona)."""
+
+    normalized: Dict[str, int] = {}
+    if isinstance(votes_obj, dict):
+        for key, raw_value in votes_obj.items():
+            try:
+                normalized[str(key)] = int(raw_value)
+            except Exception:
+                continue
+    return sum(normalized.values()), normalized
+
+
+def _list_voting_sessions(output_dir: pathlib.Path) -> List[Dict[str, object]]:
+    """Load and sort past voting sessions by creation time."""
+
+    sessions_dir = _voting_session_dir(output_dir)
+    if not sessions_dir.exists():
+        return []
+
+    sessions: List[Dict[str, object]] = []
+    for path in sessions_dir.glob("*.json"):
+        try:
+            data = json.loads(path.read_text())
+        except Exception:
+            continue
+        if not isinstance(data, dict):
+            continue
+
+        created_dt = _parse_timestamp(data.get("created"))
+        if not created_dt:
+            try:
+                created_dt = dt.datetime.fromtimestamp(path.stat().st_mtime)
+            except OSError:
+                created_dt = None
+
+        data["id"] = str(data.get("id") or path.stem)
+        data["_created_dt"] = created_dt
+        data["_path"] = str(path)
+        sessions.append(data)
+
+    sessions.sort(
+        key=lambda item: item.get("_created_dt") or dt.datetime.fromtimestamp(0),
+        reverse=True,
+    )
+    return sessions
+
+
 def _display_generated_image(path: pathlib.Path, label: str) -> None:
     """Display an image from disk with a caption inside the Streamlit app."""
 
@@ -862,6 +930,62 @@ def run() -> None:
                 _save_voting_session(output_dir, active_session)
                 st.query_params["session"] = active_session["id"]
                 st.success("Voting stopped. Results are now visible to everyone with the link.")
+
+        st.divider()
+        st.markdown("### Past voting sessions")
+        past_sessions = _list_voting_sessions(output_dir)
+        if not past_sessions:
+            st.info("No past voting sessions found.")
+        else:
+            for session in past_sessions:
+                sess_id = str(session.get("id", ""))
+                description = session.get("description", "(no description)")
+                status = session.get("status", "unknown")
+                created_text = _format_timestamp(session.get("created"))
+                variants = session.get("variants", [])
+                total_votes, normalized_votes = _vote_summary(session.get("votes"))
+                header_parts = [description, status]
+                if created_text:
+                    header_parts.append(created_text)
+                header = " — ".join(header_parts)
+
+                with st.expander(header):
+                    st.caption(f"Session ID: {sess_id}")
+                    st.caption(f"Total variants: {len(variants)} | Total votes: {total_votes}")
+                    if st.button(
+                        "Open session",
+                        key=f"open_session::{sess_id}",
+                        use_container_width=True,
+                    ):
+                        st.session_state["_active_voting_session"] = sess_id
+                        st.query_params["session"] = sess_id
+                        st.success("Loaded session. Scroll up to view or share.")
+
+                    if variants:
+                        for variant in variants:  # type: ignore[assignment]
+                            if not isinstance(variant, dict):
+                                continue
+                            persona_label = variant.get("persona", "unknown")
+                            st.markdown(f"**{persona_label}**")
+                            image_path = variant.get("image")
+                            if isinstance(image_path, str) and pathlib.Path(image_path).exists():
+                                st.image(str(image_path))
+                            elif isinstance(image_path, str):
+                                st.caption(f"Image missing at {image_path}")
+                            prompt_text = variant.get("prompt", "")
+                            if prompt_text:
+                                st.caption(prompt_text)
+                            if persona_label in normalized_votes:
+                                st.write(f"Votes: {normalized_votes[persona_label]}")
+                    else:
+                        st.info("No variants stored for this session.")
+
+                    if normalized_votes:
+                        st.markdown("**Votes**")
+                        for persona_label, count in sorted(
+                            normalized_votes.items(), key=lambda item: item[1], reverse=True
+                        ):
+                            st.write(f"{persona_label}: {count}")
 
     with personas_tab:
         st.subheader("Persona library")

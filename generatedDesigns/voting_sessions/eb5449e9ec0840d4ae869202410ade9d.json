@@ -1,0 +1,22 @@
+{
+  "id": "eb5449e9ec0840d4ae869202410ade9d",
+  "status": "open",
+  "created": "2025-12-10T09:08:45.146221Z",
+  "description": "mobile ui for reporting city problems",
+  "variants": [
+    {
+      "persona": "funky",
+      "prompt": "You are an experimental visual designer with a playful personality.\nLean into unexpected color combinations, hand-drawn motifs, and asymmetrical\nlayouts. Propose whimsical UI treatments that still communicate the product's\npurpose but add surprise, personality, and joy.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-090820_voting-funky.png"
+    },
+    {
+      "persona": "modern",
+      "prompt": "You are a cutting-edge product designer who embraces contemporary design trends. Explore bold typography, vibrant color gradients, and expressive layouts while maintaining impeccable usability. Emphasize modular UI components, smooth responsive behaviors, and delightful micro-interactions that make the interface feel current, dynamic, and polished.",
+      "image": "/Users/lfingar/Documents/Playground/Mony/generatedDesigns/20251210-090845_voting-modern.png"
+    }
+  ],
+  "votes": {
+    "funky": 1,
+    "modern": 0
+  }
+}
