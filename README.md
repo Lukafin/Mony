@@ -116,6 +116,7 @@ python -m mony "AI writing assistant workspace" modern \
 ```
 
 `--size` accepts `WIDTHxHEIGHT` or `W:H` (e.g., `768x1344` or `9:16`). When supported by the model, this maps to `image_config.aspect_ratio`.
+For Gemini models, `--image-size` accepts `1K`, `2K`, or `4K` to request higher resolution via `image_config.image_size`.
 
 Default model is `google/gemini-3-pro-image-preview`. You can override with `--model`.
 

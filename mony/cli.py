@@ -239,6 +239,11 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         help="Image size in WIDTHxHEIGHT format (API dependent).",
     )
     parser.add_argument(
+        "--image-size",
+        default="",
+        help="Gemini image size hint (e.g., 1K, 2K, 4K).",
+    )
+    parser.add_argument(
         "--dry-run",
         action="store_true",
         help="Print prompts without calling the OpenRouter API.",
@@ -810,6 +815,7 @@ def request_image(
     model: str,
     size: str,
     references: Optional[Sequence[ReferenceInput]] = None,
+    image_size: Optional[str] = None,
 ) -> bytes:
     headers = {
         "Authorization": f"Bearer {api_key}",
@@ -843,21 +849,33 @@ def request_image(
     }
 
     aspect_ratio = derive_aspect_ratio(size)
+    normalized_image_size = image_size.strip() if isinstance(image_size, str) else ""
+    image_config: Dict[str, str] = {}
     if aspect_ratio:
-        payload["image_config"] = {"aspect_ratio": aspect_ratio}
+        image_config["aspect_ratio"] = aspect_ratio
+    if normalized_image_size:
+        image_config["image_size"] = normalized_image_size
+    if image_config:
+        payload["image_config"] = image_config
 
     prompt_preview = prompt.strip().replace("\n", " ")[:160]
     references_count = len(references) if references else 0
     logger.debug(
-        "Submitting request to model=%s size=%s aspect_ratio=%s prompt_preview=%r references=%d",
+        "Submitting request to model=%s size=%s aspect_ratio=%s image_size=%s prompt_preview=%r references=%d",
         model,
         size,
         payload.get("image_config", {}).get("aspect_ratio"),
+        payload.get("image_config", {}).get("image_size"),
         prompt_preview,
         references_count,
     )
     request_start = time.perf_counter()
-    response = requests.post(API_URL, headers=headers, json=payload, timeout=60)
+    timeout_seconds = 60
+    if normalized_image_size.upper() == "4K":
+        timeout_seconds = 180
+    elif normalized_image_size.upper() == "2K":
+        timeout_seconds = 120
+    response = requests.post(API_URL, headers=headers, json=payload, timeout=timeout_seconds)
     elapsed = time.perf_counter() - request_start
     logger.debug(
         "Received response for model=%s status=%s in %.2fs",
@@ -955,6 +973,7 @@ def generate_image_for_designer(
     designer_name: str,
     model: str,
     size: str,
+    image_size: str,
     prompt_suffix: str,
     references: Sequence[ReferenceInput],
     prompt_override: Optional[str] = None,
@@ -983,6 +1002,7 @@ def generate_image_for_designer(
                 model,
                 size,
                 references=references,
+                image_size=image_size,
             )
             break
         except (ImageGenerationError, requests.RequestException) as exc:
@@ -1095,6 +1115,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 args.model,
                 args.size,
                 references=references,
+                image_size=args.image_size,
             )
             output_name = freeform_output_name(args.description)
             image_path = save_image(image_bytes, output_dir, output_name)
@@ -1125,6 +1146,7 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                     designer_name=name,
                     model=args.model,
                     size=args.size,
+                    image_size=args.image_size,
                     prompt_suffix=args.prompt_suffix,
                     references=references,
                 ): name

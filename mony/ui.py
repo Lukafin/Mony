@@ -594,6 +594,12 @@ def run() -> None:
         )
         model = st.text_input("Model", value=cli.DEFAULT_MODEL)
         size = st.text_input("Image size", value=cli.DEFAULT_IMAGE_SIZE)
+        image_size = st.selectbox(
+            "Image size (Gemini)",
+            options=["", "1K", "2K", "4K"],
+            index=0,
+            help="Optional Gemini-only resolution hint.",
+        )
         prompt_suffix = st.text_area("Prompt suffix", value="", height=80)
         perplexity_api_key_default = os.environ.get("PERPLEXITY_API_KEY", "")
         perplexity_api_key = st.text_input(
@@ -933,6 +939,7 @@ def run() -> None:
                                     model.strip(),
                                     size.strip(),
                                     references=references,
+                                    image_size=image_size,
                                 )
                                 output_name = cli.freeform_output_name(freeform_prompt)
                                 saved_path = cli.save_image(
@@ -955,6 +962,7 @@ def run() -> None:
                                         designer_name=designer_name,
                                         model=model.strip(),
                                         size=size.strip(),
+                                        image_size=image_size,
                                         prompt_suffix=prompt_suffix,
                                         references=references,
                                         prompt_override=prompt_override,
@@ -977,6 +985,7 @@ def run() -> None:
                                         model.strip(),
                                         size.strip(),
                                         references=references,
+                                        image_size=image_size,
                                     )
                                     saved_path = cli.save_image(
                                         image_bytes, output_dir, persona_name
@@ -1071,6 +1080,7 @@ def run() -> None:
                                 model.strip(),
                                 size.strip(),
                                 references=[],
+                                image_size=image_size,
                             )
                             image_path = cli.save_image(
                                 image_bytes, output_dir, f"voting-{persona_name}"
