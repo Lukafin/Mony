@@ -7,6 +7,7 @@ personas and generating concept images through the OpenRouter image API.
 
 - Describe the UI you want to explore via a CLI argument.
 - Mix and match designer prompt templates stored as markdown files.
+- Skip persona templates and send a literal prompt via `--freeform`.
 - Research the latest trendy design directions to inspire and create new personas.
 - Generate concept images for each selected designer using OpenRouter.
 - Preview prompts without generating images via `--dry-run` mode.
@@ -128,6 +129,16 @@ python -m mony "Smart home control hub" modern \
   --reference ./promo.png \
   --reference https://example.com/layout-inspiration.png
 ```
+
+#### Freeform prompts (no personas)
+
+Send a literal prompt directly to the image model and skip the UI persona prefix:
+
+```bash
+mony --freeform "Fat panda in a bamboo forest, cinematic lighting"
+```
+
+You can also enable freeform mode from the Streamlit UI with the "Use freeform prompt" toggle.
 
 Refresh or create designer personas before generation and override the research
 instructions sent to Perplexity:

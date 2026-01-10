@@ -200,15 +200,23 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
     )
     parser.add_argument(
         "description",
-        help="A short description of the UI you want to visualize."
+        help=(
+            "A short description of the UI you want to visualize, or a literal prompt "
+            "when using --freeform."
+        ),
     )
     parser.add_argument(
         "designers",
-        nargs="+",
+        nargs="*",
         help=(
             "Designer prompt names to use. Each name resolves to a .md file inside "
-            "the designer directory."
+            "the designer directory. Required unless --freeform is set."
         ),
+    )
+    parser.add_argument(
+        "--freeform",
+        action="store_true",
+        help="Treat the description as a literal prompt and skip designer personas.",
     )
     parser.add_argument(
         "--designer-dir",
@@ -279,7 +287,10 @@ def parse_args(argv: Optional[Iterable[str]] = None) -> argparse.Namespace:
         type=normalize_log_level,
         help="Logging level to emit (DEBUG, INFO, WARNING, ERROR, CRITICAL).",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    if not args.freeform and not args.designers:
+        parser.error("Provide at least one designer name or use --freeform.")
+    return args
 
 
 def load_designer_prompt(designer_dir: pathlib.Path, name: str) -> DesignerPrompt:
@@ -310,6 +321,18 @@ def sanitize_designer_slug(name: str) -> str:
     if not slug:
         slug = "designer"
     return slug
+
+
+def freeform_output_name(prompt: str, max_length: int = 40) -> str:
+    """Generate a short slug for freeform prompts to use in filenames."""
+
+    slug = re.sub(r"[^A-Za-z0-9_-]+", "-", prompt.strip().lower())
+    slug = slug.strip("-")
+    if not slug:
+        return "freeform"
+    if len(slug) > max_length:
+        slug = slug[:max_length].rstrip("-")
+    return slug or "freeform"
 
 
 def extract_text_from_perplexity_message(message: object) -> str:
@@ -601,6 +624,15 @@ def build_prompt(description: str, prompt_template: str, suffix: str = "") -> st
         "and output the image. The design should follow these guidelines:\n\n"
     )
     full_prompt = f"{image_instruction}{prompt_template.strip()}\n\nProject brief: {description_block}"
+    if suffix:
+        full_prompt = f"{full_prompt}\n\nAdditional guidance: {suffix.strip()}"
+    return full_prompt
+
+
+def build_freeform_prompt(prompt: str, suffix: str = "") -> str:
+    """Return a literal prompt, optionally augmented with the suffix."""
+
+    full_prompt = prompt.strip()
     if suffix:
         full_prompt = f"{full_prompt}\n\nAdditional guidance: {suffix.strip()}"
     return full_prompt
@@ -1019,9 +1051,22 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
         print(str(exc), file=sys.stderr)
         return 1
 
+    if args.freeform and args.designers:
+        logger.warning("Ignoring designer personas because --freeform is set.")
+
     results: List[Tuple[str, pathlib.Path]] = []
     # Dry-run preserves sequential prompt printing for readability
     if args.dry_run:
+        if args.freeform:
+            full_prompt = build_freeform_prompt(args.description, args.prompt_suffix)
+            print("=== freeform ===")
+            print(full_prompt)
+            if references:
+                print("References:")
+                for ref in references:
+                    print(f"  - {ref.source}")
+            print()
+            return 0
         for name in args.designers:
             try:
                 designer_prompt = load_designer_prompt(designer_dir, name)
@@ -1036,6 +1081,27 @@ def main(argv: Optional[Iterable[str]] = None) -> int:
                 for ref in references:
                     print(f"  - {ref.source}")
             print()
+        return 0
+
+    if args.freeform:
+        if not args.description.strip():
+            print("Provide a non-empty prompt when using --freeform.", file=sys.stderr)
+            return 1
+        try:
+            full_prompt = build_freeform_prompt(args.description, args.prompt_suffix)
+            image_bytes = request_image(
+                api_key,
+                full_prompt,
+                args.model,
+                args.size,
+                references=references,
+            )
+            output_name = freeform_output_name(args.description)
+            image_path = save_image(image_bytes, output_dir, output_name)
+        except (ImageGenerationError, requests.RequestException) as exc:
+            print(str(exc), file=sys.stderr)
+            return 1
+        print(f"Generated image: {image_path}")
         return 0
 
     # Parallelize per-designer image generation

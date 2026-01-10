@@ -809,56 +809,78 @@ def run() -> None:
             st.write("No personas found in the configured designer directory.")
 
     with generate_tab:
-        st.subheader("Project brief")
-        description = st.text_area(
-            "Describe the UI you would like to visualize", height=120
+        st.subheader("Prompt mode")
+        freeform_mode = st.toggle(
+            "Use freeform prompt (skip personas)",
+            value=False,
+            help=(
+                "Send a literal prompt to the image model without adding the UI persona prefix."
+            ),
         )
 
-        st.subheader("Designer persona")
-        col1, col2 = st.columns(2)
-        with col1:
-            selected_designers = st.multiselect(
-                "Select built-in designers", available_designers
-            )
-            if not available_designers:
-                st.info(
-                    "No designer prompts found. Adjust the designer directory path in the sidebar."
-                )
-
-        with col2:
-            custom_name = st.text_input("Custom persona name", value="")
-            custom_prompt = st.text_area(
-                "Custom persona prompt",
-                value="",
-                height=160,
-                help=(
-                    "Provide your own persona instructions. The project brief and optional "
-                    "suffix will be appended automatically."
-                ),
-            )
-
+        freeform_prompt = ""
+        description = ""
+        selected_designers = []
+        custom_name = ""
+        custom_prompt = ""
         selected_prompt_overrides: Dict[str, str] = {}
-        if selected_designers:
-            st.caption(
-                "Expand a persona below to preview or tweak its prompt for this generation."
+
+        if freeform_mode:
+            freeform_prompt = st.text_area(
+                "Literal prompt",
+                height=160,
+                help="This text is sent directly to the image model.",
             )
-            for designer_name in selected_designers:
-                prompt_state_key = _ensure_persona_state(
-                    designer_dir, designer_name, prefix=PROMPT_EDIT_PREFIX
+        else:
+            st.subheader("Project brief")
+            description = st.text_area(
+                "Describe the UI you would like to visualize", height=120
+            )
+
+            st.subheader("Designer persona")
+            col1, col2 = st.columns(2)
+            with col1:
+                selected_designers = st.multiselect(
+                    "Select built-in designers", available_designers
                 )
-                with st.expander(f"{designer_name} prompt", expanded=False):
-                    st.text_area(
-                        "Persona prompt",
-                        key=prompt_state_key,
-                        height=180,
-                        label_visibility="collapsed",
-                        help=(
-                            "Changes here only affect the current run. Use the Personas tab to save edits."
-                        ),
+                if not available_designers:
+                    st.info(
+                        "No designer prompts found. Adjust the designer directory path in the sidebar."
                     )
-                selected_prompt_overrides[designer_name] = st.session_state.get(
-                    prompt_state_key, ""
+
+            with col2:
+                custom_name = st.text_input("Custom persona name", value="")
+                custom_prompt = st.text_area(
+                    "Custom persona prompt",
+                    value="",
+                    height=160,
+                    help=(
+                        "Provide your own persona instructions. The project brief and optional "
+                        "suffix will be appended automatically."
+                    ),
                 )
+
+            if selected_designers:
+                st.caption(
+                    "Expand a persona below to preview or tweak its prompt for this generation."
+                )
+                for designer_name in selected_designers:
+                    prompt_state_key = _ensure_persona_state(
+                        designer_dir, designer_name, prefix=PROMPT_EDIT_PREFIX
+                    )
+                    with st.expander(f"{designer_name} prompt", expanded=False):
+                        st.text_area(
+                            "Persona prompt",
+                            key=prompt_state_key,
+                            height=180,
+                            label_visibility="collapsed",
+                            help=(
+                                "Changes here only affect the current run. Use the Personas tab to save edits."
+                            ),
+                        )
+                    selected_prompt_overrides[designer_name] = st.session_state.get(
+                        prompt_state_key, ""
+                    )
 
         st.subheader("Reference images")
         uploaded_refs = st.file_uploader(
@@ -883,10 +905,12 @@ def run() -> None:
             st.error(url_error)
 
         if st.button("Generate images", type="primary"):
-            if not description.strip():
-                st.error("Please provide a project description before generating images.")
-            elif not api_key.strip():
+            if not api_key.strip():
                 st.error("Please enter your OpenRouter API key in the sidebar.")
+            elif freeform_mode and not freeform_prompt.strip():
+                st.error("Please provide a literal prompt before generating images.")
+            elif not freeform_mode and not description.strip():
+                st.error("Please provide a project description before generating images.")
             else:
                 ensure_dir_error = None
                 try:
@@ -898,32 +922,10 @@ def run() -> None:
                 else:
                     results = []
                     with st.spinner("Generating images..."):
-                        for designer_name in selected_designers:
-                            prompt_override = selected_prompt_overrides.get(
-                                designer_name
-                            )
+                        if freeform_mode:
                             try:
-                                _, image_path = cli.generate_image_for_designer(
-                                    api_key=api_key.strip(),
-                                    designer_dir=designer_dir,
-                                    output_dir=output_dir,
-                                    description=description,
-                                    designer_name=designer_name,
-                                    model=model.strip(),
-                                    size=size.strip(),
-                                    prompt_suffix=prompt_suffix,
-                                    references=references,
-                                    prompt_override=prompt_override,
-                                )
-                                results.append((designer_name, image_path))
-                            except Exception as exc:  # pragma: no cover - runtime feedback
-                                st.error(f"Failed to generate for {designer_name}: {exc}")
-
-                        if custom_prompt.strip():
-                            persona_name = custom_name.strip() or "custom"
-                            try:
-                                full_prompt = cli.build_prompt(
-                                    description, custom_prompt, prompt_suffix
+                                full_prompt = cli.build_freeform_prompt(
+                                    freeform_prompt, prompt_suffix
                                 )
                                 image_bytes = cli.request_image(
                                     api_key.strip(),
@@ -932,21 +934,72 @@ def run() -> None:
                                     size.strip(),
                                     references=references,
                                 )
+                                output_name = cli.freeform_output_name(freeform_prompt)
                                 saved_path = cli.save_image(
-                                    image_bytes, output_dir, persona_name
+                                    image_bytes, output_dir, output_name
                                 )
-                                results.append((persona_name, saved_path))
+                                results.append(("freeform", saved_path))
                             except Exception as exc:  # pragma: no cover - runtime feedback
-                                st.error(f"Failed to generate for custom persona: {exc}")
+                                st.error(f"Failed to generate freeform image: {exc}")
+                        else:
+                            for designer_name in selected_designers:
+                                prompt_override = selected_prompt_overrides.get(
+                                    designer_name
+                                )
+                                try:
+                                    _, image_path = cli.generate_image_for_designer(
+                                        api_key=api_key.strip(),
+                                        designer_dir=designer_dir,
+                                        output_dir=output_dir,
+                                        description=description,
+                                        designer_name=designer_name,
+                                        model=model.strip(),
+                                        size=size.strip(),
+                                        prompt_suffix=prompt_suffix,
+                                        references=references,
+                                        prompt_override=prompt_override,
+                                    )
+                                    results.append((designer_name, image_path))
+                                except Exception as exc:  # pragma: no cover - runtime feedback
+                                    st.error(
+                                        f"Failed to generate for {designer_name}: {exc}"
+                                    )
+
+                            if custom_prompt.strip():
+                                persona_name = custom_name.strip() or "custom"
+                                try:
+                                    full_prompt = cli.build_prompt(
+                                        description, custom_prompt, prompt_suffix
+                                    )
+                                    image_bytes = cli.request_image(
+                                        api_key.strip(),
+                                        full_prompt,
+                                        model.strip(),
+                                        size.strip(),
+                                        references=references,
+                                    )
+                                    saved_path = cli.save_image(
+                                        image_bytes, output_dir, persona_name
+                                    )
+                                    results.append((persona_name, saved_path))
+                                except Exception as exc:  # pragma: no cover - runtime feedback
+                                    st.error(
+                                        f"Failed to generate for custom persona: {exc}"
+                                    )
 
                     if results:
                         st.success("Generation complete!")
                         for persona, image_path in results:
                             _display_generated_image(image_path, persona)
                     else:
-                        st.info(
-                            "No images were generated. Ensure you selected a designer or provided a custom persona."
-                        )
+                        if freeform_mode:
+                            st.info(
+                                "No images were generated. Provide a prompt and try again."
+                            )
+                        else:
+                            st.info(
+                                "No images were generated. Ensure you selected a designer or provided a custom persona."
+                            )
 
     with voting_tab:
         st.subheader("Persona variations voting")
