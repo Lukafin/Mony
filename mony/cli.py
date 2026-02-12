@@ -143,32 +143,35 @@ class ReferenceInput:
 
 
 def _reference_to_message_part(reference: ReferenceInput) -> Optional[dict]:
-    """Convert a ReferenceInput payload into a chat content part."""
+    """Convert a ReferenceInput payload into an OpenRouter chat content part."""
 
     payload = reference.payload or {}
-    ref_type = payload.get("type") or "input_image"
-    part: dict = {"type": ref_type}
-
+    # OpenRouter's chat-completions multimodal format expects "image_url"
+    # entries alongside "text" parts in a content array.
     url_value = payload.get("image_url")
     if isinstance(url_value, dict):
-        part["image_url"] = url_value
-        return part
+        url = url_value.get("url") or url_value.get("href")
+        if isinstance(url, str) and url.strip():
+            return {"type": "image_url", "image_url": {"url": url.strip()}}
     if isinstance(url_value, str) and url_value.strip():
-        part["image_url"] = {"url": url_value.strip()}
-        return part
+        return {"type": "image_url", "image_url": {"url": url_value.strip()}}
 
     base64_value = payload.get("image_base64")
     if isinstance(base64_value, str) and base64_value.strip():
         encoded = base64_value.strip()
         if not encoded.startswith("data:image/"):
             encoded = f"data:image/png;base64,{encoded}"
-        part["image_url"] = {"url": encoded}
-        return part
+        return {"type": "image_url", "image_url": {"url": encoded}}
 
     inline_value = payload.get("inline_data")
     if isinstance(inline_value, dict):
-        part["inline_data"] = inline_value
-        return part
+        inline_data = inline_value.get("data")
+        if isinstance(inline_data, str) and inline_data.strip():
+            mime_type = inline_value.get("mime_type") or inline_value.get("mimeType") or "image/png"
+            data_url = f"data:{mime_type};base64,{inline_data.strip()}"
+            return {"type": "image_url", "image_url": {"url": data_url}}
+        # Keep a permissive fallback in case a provider accepts inline_data directly.
+        return {"type": "input_image", "inline_data": inline_value}
 
     return None
 
@@ -826,7 +829,7 @@ def request_image(
     # Build chat completions payload with image modalities per OpenRouter docs
     content_value: Union[str, List[dict]]
     if references:
-        parts: List[dict] = [{"type": "input_text", "text": prompt}]
+        parts: List[dict] = [{"type": "text", "text": prompt}]
         for ref in references:
             part = _reference_to_message_part(ref)
             if part:
