@@ -425,6 +425,35 @@ def _display_generated_image(path: pathlib.Path, label: str) -> None:
     st.caption(path.name)
 
 
+def _image_path_to_reference(path: pathlib.Path) -> cli.ReferenceInput:
+    """Convert a generated image on disk into a reference input payload."""
+
+    encoded = base64.b64encode(path.read_bytes()).decode("ascii")
+    return cli.ReferenceInput(
+        source=path.name,
+        payload={"type": "input_image", "image_base64": encoded},
+    )
+
+
+def _build_dutchification_prompt(
+    custom_prompt: str,
+    dutchification_level: int,
+    road_side_mode: str,
+) -> str:
+    """Build a focused image-edit prompt from UI controls."""
+
+    side_text = "both sides of the road"
+    if road_side_mode == "left":
+        side_text = "the left side of the road only"
+    elif road_side_mode == "right":
+        side_text = "the right side of the road only"
+    return (
+        "Modify the provided image while preserving the same camera angle and composition. "
+        f"Apply Dutchification changes at intensity {dutchification_level}/100 on {side_text}. "
+        f"Additional edit request: {custom_prompt.strip()}"
+    )
+
+
 def _research_designer_via_perplexity(
     designer_dir: pathlib.Path,
     persona_name: str,
@@ -898,6 +927,25 @@ def run() -> None:
             "Reference image URLs (one per line)", value="", height=80
         )
 
+        st.subheader("Dutchification level")
+        dutchification_level = st.slider(
+            "Dutchification level",
+            min_value=0,
+            max_value=100,
+            value=70,
+            help="Higher values apply more visible Dutch street-design interventions.",
+        )
+        road_side_mode = st.radio(
+            "Road side scope",
+            options=["both", "left", "right"],
+            format_func=lambda value: {
+                "both": "Both sides of the road (default)",
+                "left": "Left side only",
+                "right": "Right side only",
+            }[value],
+            horizontal=True,
+        )
+
         references: List[cli.ReferenceInput] = []
         url_error: str | None = None
         if reference_urls_text.strip():
@@ -998,8 +1046,63 @@ def run() -> None:
 
                     if results:
                         st.success("Generation complete!")
+                        generated_paths: Dict[str, pathlib.Path] = {}
                         for persona, image_path in results:
                             _display_generated_image(image_path, persona)
+                            generated_paths[persona] = image_path
+
+                        st.markdown("### Modify generated image")
+                        image_to_modify = st.selectbox(
+                            "Choose generated image",
+                            options=list(generated_paths.keys()),
+                            key="modify_image_target",
+                        )
+                        show_modify_prompt = st.button("Modify", type="secondary")
+                        if show_modify_prompt:
+                            st.session_state["_show_modify_prompt"] = True
+
+                        if st.session_state.get("_show_modify_prompt"):
+                            modify_prompt = st.text_area(
+                                "How should the image be modified?",
+                                value="add the tram line to the left",
+                                key="modify_prompt_text",
+                                help="Example: add the tram line to the left",
+                            )
+                            if st.button("Apply modification", type="primary"):
+                                if not modify_prompt.strip():
+                                    st.error("Please enter modification instructions.")
+                                else:
+                                    target_path = generated_paths[image_to_modify]
+                                    edit_prompt = _build_dutchification_prompt(
+                                        modify_prompt,
+                                        dutchification_level,
+                                        road_side_mode,
+                                    )
+                                    try:
+                                        edit_references = [
+                                            _image_path_to_reference(target_path)
+                                        ]
+                                        image_bytes = cli.request_image(
+                                            api_key.strip(),
+                                            edit_prompt,
+                                            model.strip(),
+                                            size.strip(),
+                                            references=edit_references,
+                                            image_size=image_size,
+                                        )
+                                        modified_path = cli.save_image(
+                                            image_bytes,
+                                            output_dir,
+                                            f"{image_to_modify}-modified",
+                                        )
+                                    except Exception as exc:  # pragma: no cover - runtime feedback
+                                        st.error(f"Failed to modify image: {exc}")
+                                    else:
+                                        st.success("Image modified successfully!")
+                                        _display_generated_image(
+                                            modified_path,
+                                            f"{image_to_modify} (modified)",
+                                        )
                     else:
                         if freeform_mode:
                             st.info(
